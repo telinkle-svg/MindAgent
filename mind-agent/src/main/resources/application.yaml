@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: mind-agent
+  datasource:
+    url: ${MINDAGENT_DB_URL:jdbc:postgresql://localhost:5432/jchatmind}
+    username: ${MINDAGENT_DB_USERNAME:jchatmind}
+    password: ${MINDAGENT_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  mail:
+    host: smtp.qq.com
+    port: 587
+    username: ${MINDAGENT_MAIL_USERNAME:}
+    password: ${MINDAGENT_MAIL_PASSWORD:}
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+  ai:
+    deepseek:
+      api-key: ${MINDAGENT_DEEPSEEK_API_KEY:}
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-v4-flash
+    zhipuai:
+      api-key: ${MINDAGENT_ZHIPUAI_API_KEY:}
+      base-url: https://open.bigmodel.cn/api/paas
+      chat:
+        options:
+          model: glm-4.7
+mybatis:
+  type-aliases-package: com.kama.mindagent.model.entity
+  mapper-locations: classpath:mapper/*.xml
+  type-handlers-package: com.kama.mindagent.typehandler
+
+document:
+  storage:
+    base-path: ./data/documents

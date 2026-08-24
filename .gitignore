@@ -1,0 +1,107 @@
+# ==============================
+# MindAgent repository exclusions
+# ==============================
+
+# Non-core project materials and local agent metadata
+/docs/
+/examples/
+/.agents/
+/.codex/
+/mind-agent/.gitignore
+/ui/.gitignore
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE and editor metadata
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Java / Maven / Spring Boot build output
+**/target/
+**/build/
+**/out/
+**/HELP.md
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+**/.mvn/timing.properties
+
+# Node.js / Vite build output and dependencies
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/.vite/
+**/.cache/
+**/.parcel-cache/
+**/.turbo/
+*.tsbuildinfo
+
+# Logs and crash reports
+*.log
+logs/
+**/logs/
+hs_err_pid*.log
+replay_pid*.log
+
+# Package-manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local environment files and untracked configuration overrides
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/application-local.yml
+**/application-local.yaml
+**/application-local.properties
+**/application-dev.yml
+**/application-dev.yaml
+**/application-dev.properties
+**/*-local.properties
+*.local
+
+# Private keys, certificates, and local credential material
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/secrets/
+**/credentials/
+
+# Runtime-generated user data and local database artifacts
+mind-agent/data/
+**/uploads/
+**/documents/
+*.dump
+*.backup
+*.sqlite
+*.sqlite3
+
+# Temporary/editor files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+

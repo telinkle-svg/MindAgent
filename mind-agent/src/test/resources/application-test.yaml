@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: ${MINDAGENT_TEST_JDBC_URL:jdbc:postgresql://localhost:5432/jchatmind}
+    username: ${MINDAGENT_TEST_DB_USER:jchatmind}
+    password: ${MINDAGENT_TEST_DB_PASSWORD:}
+  ai:
+    deepseek:
+      api-key: ${MINDAGENT_TEST_DEEPSEEK_API_KEY:test-disabled}
+    zhipuai:
+      api-key: ${MINDAGENT_TEST_ZHIPUAI_API_KEY:test-disabled}
