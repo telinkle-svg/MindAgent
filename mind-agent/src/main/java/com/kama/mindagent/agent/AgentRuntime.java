@@ -444,7 +444,9 @@ public class AgentRuntime {
             publishFailure(agentException.getErrorCode());
             throw agentException;
         } finally {
-            publishStatus(AgentEvent.Type.AI_DONE, "任务完成");
+            if (agentState == AgentLifecycleState.FINISHED) {
+                publishStatus(AgentEvent.Type.AI_DONE, "任务完成");
+            }
         }
     }
 

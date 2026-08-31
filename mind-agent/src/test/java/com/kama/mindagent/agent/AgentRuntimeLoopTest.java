@@ -140,8 +140,7 @@ class AgentRuntimeLoopTest {
                 .containsExactly(
                         AgentEvent.Type.AI_PLANNING,
                         AgentEvent.Type.AI_THINKING,
-                        AgentEvent.Type.AI_ERROR,
-                        AgentEvent.Type.AI_DONE
+                        AgentEvent.Type.AI_ERROR
                 );
     }
 
@@ -214,7 +213,7 @@ class AgentRuntimeLoopTest {
     }
 
     @Test
-    void run_whenModelCallFails_emitsSafeModelErrorAndDone() {
+    void run_whenModelCallFails_emitsSafeModelErrorOnly() {
         ModelResponseGateway gateway = mock(ModelResponseGateway.class);
         when(gateway.request(any(Prompt.class), any(String.class), any()))
                 .thenThrow(new IllegalStateException("model internals"));
@@ -259,11 +258,12 @@ class AgentRuntimeLoopTest {
         assertThat(gateway.calls()).hasSize(20);
         assertThat(messages.messages()).hasSize(40);
         assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
-                .containsSubsequence(AgentEvent.Type.AI_ERROR, AgentEvent.Type.AI_DONE);
+                .contains(AgentEvent.Type.AI_ERROR)
+                .doesNotContain(AgentEvent.Type.AI_DONE);
     }
 
     @Test
-    void run_whenToolExecutionFails_wrapsErrorAndStillEmitsDone() {
+    void run_whenToolExecutionFails_emitsErrorOnly() {
         ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
                 AgentTestMessages.assistantToolCall("call-failure", "databaseQuery", "{\"sql\":\"SELECT 1\"}")
         ));
@@ -282,7 +282,8 @@ class AgentRuntimeLoopTest {
         assertThat(messages.messages()).extracting(ChatMessageDTO::getRole)
                 .containsExactly(ChatMessageDTO.RoleType.ASSISTANT);
         assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
-                .containsSubsequence(AgentEvent.Type.AI_ERROR, AgentEvent.Type.AI_DONE);
+                .contains(AgentEvent.Type.AI_ERROR)
+                .doesNotContain(AgentEvent.Type.AI_DONE);
     }
 
     private void assertFailure(
@@ -298,7 +299,8 @@ class AgentRuntimeLoopTest {
 
         List<AgentEvent> sentEvents = sse.sentEvents();
         assertThat(sentEvents).extracting(AgentEvent::getType)
-                .containsSubsequence(AgentEvent.Type.AI_ERROR, AgentEvent.Type.AI_DONE);
+                .contains(AgentEvent.Type.AI_ERROR)
+                .doesNotContain(AgentEvent.Type.AI_DONE);
         AgentEvent errorMessage = sentEvents.stream()
                 .filter(event -> event.getType() == AgentEvent.Type.AI_ERROR)
                 .findFirst()

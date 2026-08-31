@@ -4,20 +4,44 @@ import com.kama.mindagent.agent.AgentRuntime;
 import com.kama.mindagent.agent.AgentRuntimeFactory;
 import com.kama.mindagent.event.ChatEvent;
 import lombok.AllArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 @Component
 @AllArgsConstructor
 public class ChatEventListener {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatEventListener.class);
+
     private final AgentRuntimeFactory agentRuntimeFactory;
+    private final ConcurrentMap<String, CompletableFuture<Void>> sessionTails = new ConcurrentHashMap<>();
 
     @Async
     @EventListener
     public void handle(ChatEvent event) {
-        // 创建一个 Agent 实例处理聊天事件
+        String sessionId = event.getSessionId();
+        CompletableFuture<Void> next = sessionTails.compute(sessionId, (key, previous) -> {
+            CompletableFuture<Void> ready = previous == null
+                    ? CompletableFuture.completedFuture(null)
+                    : previous.exceptionally(error -> null);
+            return ready.thenRun(() -> execute(event));
+        });
+        next.whenComplete((ignored, error) -> {
+            if (error != null) {
+                log.error("Agent execution failed for session {}", sessionId, error);
+            }
+            sessionTails.remove(sessionId, next);
+        });
+    }
+
+    private void execute(ChatEvent event) {
         AgentRuntime agentRuntime = agentRuntimeFactory.createRuntime(event.getAgentId(), event.getSessionId());
         agentRuntime.execute();
     }
