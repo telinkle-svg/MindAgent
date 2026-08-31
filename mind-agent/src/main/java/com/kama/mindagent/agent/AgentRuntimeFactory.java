@@ -44,9 +44,6 @@ public class AgentRuntimeFactory {
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
 
-    // 运行时 Agent 配置
-    private AgentDTO agentConfig;
-
     public AgentRuntimeFactory(
             ChatClientRegistry chatClientRegistry,
             AgentEventStream agentEventStream,
@@ -76,7 +73,7 @@ public class AgentRuntimeFactory {
     /**
      * 将数据库中存储的记忆恢复成 List<Message> 结构
      */
-    private List<Message> loadMemory(String chatSessionId) {
+    private List<Message> loadMemory(AgentDTO agentConfig, String chatSessionId) {
         int messageLength = agentConfig.getChatOptions().getMessageLength();
         List<ChatMessageDTO> chatMessages = chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength);
         List<Message> memory = new ArrayList<>();
@@ -117,8 +114,7 @@ public class AgentRuntimeFactory {
 
     private AgentDTO toAgentConfig(Agent agent) {
         try {
-            agentConfig = agentConverter.toDTO(agent);
-            return agentConfig;
+            return agentConverter.toDTO(agent);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("解析 Agent 配置失败", e);
         }
@@ -195,6 +191,7 @@ public class AgentRuntimeFactory {
 
     private AgentRuntime assembleRuntime(
             Agent agent,
+            AgentDTO agentConfig,
             List<Message> memory,
             List<KnowledgeBaseDTO> knowledgeBases,
             List<ToolCallback> toolCallbacks,
@@ -227,7 +224,7 @@ public class AgentRuntimeFactory {
     public AgentRuntime createRuntime(String agentId, String chatSessionId) {
         Agent agent = loadAgent(agentId);
         AgentDTO agentConfig = toAgentConfig(agent);
-        List<Message> memory = loadMemory(chatSessionId);
+        List<Message> memory = loadMemory(agentConfig, chatSessionId);
 
         // 解析 agent 的支持的知识库
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
@@ -238,6 +235,7 @@ public class AgentRuntimeFactory {
 
         return assembleRuntime(
                 agent,
+                agentConfig,
                 memory,
                 knowledgeBases,
                 toolCallbacks,
