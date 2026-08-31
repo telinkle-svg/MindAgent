@@ -32,14 +32,9 @@ public class LoopExampleV2Test {
     @Qualifier("deepseek-chat")
     private ChatClient chatClient;
 
-    @Autowired
-    private SampleCityTool cityTool;
-
-    @Autowired
-    private SampleDateTool dateTool;
-
-    @Autowired
-    private SampleWeatherTool weatherTool;
+    private final SampleCityTool cityTool = new SampleCityTool();
+    private final SampleDateTool dateTool = new SampleDateTool();
+    private final SampleWeatherTool weatherTool = new SampleWeatherTool();
 
     @Test
     public void testToolCalling() {

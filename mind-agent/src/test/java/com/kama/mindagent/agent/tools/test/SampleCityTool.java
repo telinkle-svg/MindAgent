@@ -2,9 +2,6 @@ package com.kama.mindagent.agent.tools.test;
 
 import com.kama.mindagent.agent.tools.AgentTool;
 import com.kama.mindagent.agent.tools.ToolCategory;
-import org.springframework.stereotype.Component;
-
-@Component
 public class SampleCityTool implements AgentTool {
     @Override
     public String name() {

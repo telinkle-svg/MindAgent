@@ -2,12 +2,10 @@ package com.kama.mindagent.agent.tools.test;
 
 import com.kama.mindagent.agent.tools.AgentTool;
 import com.kama.mindagent.agent.tools.ToolCategory;
-import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
-@Component
 public class SampleDateTool implements AgentTool {
     @Override
     public String name() {
