@@ -1,6 +1,7 @@
 package com.kama.mindagent.config;
 
 import com.kama.mindagent.agent.AgentLoopPolicy;
+import com.kama.mindagent.agent.context.ContextBudgetPolicy;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,6 +19,8 @@ public class AgentRuntimeProperties {
     private int maxPlanRevisions = AgentLoopPolicy.DEFAULT_MAX_PLAN_REVISIONS;
     private int maxToolCalls = AgentLoopPolicy.DEFAULT_MAX_TOOL_CALLS;
     private Duration maxRunDuration = AgentLoopPolicy.DEFAULT_MAX_RUN_DURATION;
+    private int maxToolResultChars = ContextBudgetPolicy.DEFAULT_MAX_TOOL_RESULT_CHARS;
+    private int recentTurns = ContextBudgetPolicy.DEFAULT_RECENT_TURNS;
 
     public AgentLoopPolicy toPolicy() {
         return new AgentLoopPolicy(
@@ -27,5 +30,9 @@ public class AgentRuntimeProperties {
                 maxToolCalls,
                 maxRunDuration
         );
+    }
+
+    public ContextBudgetPolicy toContextBudgetPolicy() {
+        return new ContextBudgetPolicy(maxToolResultChars, recentTurns);
     }
 }

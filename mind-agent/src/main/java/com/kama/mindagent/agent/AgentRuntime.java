@@ -2,6 +2,9 @@ package com.kama.mindagent.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.mindagent.agent.context.ContextBudgetPolicy;
+import com.kama.mindagent.agent.context.ConversationContextAssembler;
+import com.kama.mindagent.agent.context.ToolResultTruncator;
 import com.kama.mindagent.agent.planning.PlanControlTool;
 import com.kama.mindagent.agent.planning.PlanAction;
 import com.kama.mindagent.agent.planning.PlanCommand;
@@ -80,6 +83,9 @@ public class AgentRuntime {
     private PlanningMode planningMode;
     private PlanControlTool planControlTool;
     private AgentLoopPolicy loopPolicy = AgentLoopPolicy.defaults();
+    private ContextBudgetPolicy contextBudgetPolicy = ContextBudgetPolicy.defaults();
+    private ConversationContextAssembler contextAssembler = new ConversationContextAssembler(contextBudgetPolicy);
+    private ToolResultTruncator toolResultTruncator = new ToolResultTruncator(contextBudgetPolicy.maxToolResultChars());
     private final AgentRunMetrics runMetrics = new AgentRunMetrics();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -135,7 +141,8 @@ public class AgentRuntime {
                 ToolCallingManager.builder().build(),
                 PlanningMode.AUTO,
                 null,
-                AgentLoopPolicy.defaults()
+                AgentLoopPolicy.defaults(),
+                ContextBudgetPolicy.defaults()
         );
     }
 
@@ -171,7 +178,8 @@ public class AgentRuntime {
                 toolCallingManager,
                 PlanningMode.AUTO,
                 null,
-                AgentLoopPolicy.defaults()
+                AgentLoopPolicy.defaults(),
+                ContextBudgetPolicy.defaults()
         );
     }
 
@@ -209,7 +217,8 @@ public class AgentRuntime {
                 toolCallingManager,
                 planningMode,
                 planControlTool,
-                AgentLoopPolicy.defaults()
+                AgentLoopPolicy.defaults(),
+                ContextBudgetPolicy.defaults()
         );
     }
 
@@ -231,6 +240,47 @@ public class AgentRuntime {
               PlanControlTool planControlTool,
               AgentLoopPolicy loopPolicy
     ) {
+        this(
+                agentId,
+                name,
+                description,
+                systemPrompt,
+                agentChatGateway,
+                maxMessages,
+                memory,
+                availableTools,
+                availableKbs,
+                chatSessionId,
+                agentEventStream,
+                chatMessageFacadeService,
+                chatMessageConverter,
+                toolCallingManager,
+                planningMode,
+                planControlTool,
+                loopPolicy,
+                ContextBudgetPolicy.defaults()
+        );
+    }
+
+    AgentRuntime(String agentId,
+              String name,
+              String description,
+              String systemPrompt,
+              ModelResponseGateway agentChatGateway,
+              Integer maxMessages,
+              List<Message> memory,
+              List<ToolCallback> availableTools,
+              List<KnowledgeBaseDTO> availableKbs,
+              String chatSessionId,
+              AgentEventStream agentEventStream,
+              ChatMessageFacadeService chatMessageFacadeService,
+              ChatMessageConverter chatMessageConverter,
+              ToolCallingManager toolCallingManager,
+              PlanningMode planningMode,
+              PlanControlTool planControlTool,
+              AgentLoopPolicy loopPolicy,
+              ContextBudgetPolicy contextBudgetPolicy
+    ) {
         this.agentId = agentId;
         this.name = name;
         this.description = description;
@@ -249,12 +299,22 @@ public class AgentRuntime {
         this.planningMode = PlanningMode.fromNullable(planningMode);
         this.planControlTool = planControlTool;
         this.loopPolicy = loopPolicy == null ? AgentLoopPolicy.defaults() : loopPolicy;
+        this.contextBudgetPolicy = contextBudgetPolicy == null
+                ? ContextBudgetPolicy.defaults()
+                : contextBudgetPolicy;
+        this.contextAssembler = new ConversationContextAssembler(this.contextBudgetPolicy);
+        this.toolResultTruncator = new ToolResultTruncator(this.contextBudgetPolicy.maxToolResultChars());
 
         this.agentState = AgentLifecycleState.IDLE;
 
         // 保存聊天记录
+        int configuredMaxMessages = maxMessages == null ? DEFAULT_MAX_MESSAGES : maxMessages;
+        int contextMemoryCapacity = Math.max(
+                configuredMaxMessages,
+                this.contextBudgetPolicy.recentTurns() * 4 + 10
+        );
         this.chatMemory = MessageWindowChatMemory.builder()
-                .maxMessages(maxMessages == null ? DEFAULT_MAX_MESSAGES : maxMessages)
+                .maxMessages(contextMemoryCapacity)
                 .build();
         this.chatMemory.add(chatSessionId, memory);
 
@@ -411,7 +471,7 @@ public class AgentRuntime {
         // 又能够避免将 thinkPrompt 加入到聊天记录中
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
-                .messages(this.chatMemory.get(this.chatSessionId))
+                .messages(this.contextAssembler.assemble(this.chatMemory.get(this.chatSessionId)))
                 .build();
 
         loopPolicy.ensureDuration(runMetrics.startedAt());
@@ -488,7 +548,7 @@ public class AgentRuntime {
         }
 
         Prompt prompt = Prompt.builder()
-                .messages(this.chatMemory.get(this.chatSessionId))
+                .messages(this.contextAssembler.assemble(this.chatMemory.get(this.chatSessionId)))
                 .chatOptions(this.chatOptions)
                 .build();
 
@@ -504,17 +564,6 @@ public class AgentRuntime {
             throw new AgentExecutionException(AgentFailureCode.TOOL_EXECUTION_FAILED);
         }
 
-        // 合并记忆：保留原有上下文，追加 AI 工具调用消息与工具执行结果，避免丢失系统提示词和早期对话
-        List<Message> mergedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
-        mergedMemory.add(this.lastChatResponse.getResult().getOutput());
-        for (Message message : toolExecutionResult.conversationHistory()) {
-            if (message instanceof ToolResponseMessage toolMessage) {
-                mergedMemory.add(toolMessage);
-            }
-        }
-        this.chatMemory.clear(this.chatSessionId);
-        this.chatMemory.add(this.chatSessionId, mergedMemory);
-
         ToolResponseMessage toolResponseMessage = (ToolResponseMessage) toolExecutionResult
                 .conversationHistory()
                 .get(toolExecutionResult.conversationHistory().size() - 1);
@@ -529,6 +578,7 @@ public class AgentRuntime {
         // 保存工具调用
         persistMessage(toolResponseMessage);
         publishPendingMessages();
+        appendToolResponseToMemory(toolResponseMessage);
 
         if (toolResponseMessage.getResponses()
                 .stream()
@@ -570,9 +620,9 @@ public class AgentRuntime {
                     )))
                     .build();
 
-            appendToolResponseToMemory(toolResponseMessage);
             persistMessage(toolResponseMessage);
             publishPendingMessages();
+            appendToolResponseToMemory(toolResponseMessage);
 
             if (result.accepted()) {
                 runMetrics.recordPlanRevision();
@@ -591,7 +641,7 @@ public class AgentRuntime {
     private void appendToolResponseToMemory(ToolResponseMessage toolResponseMessage) {
         List<Message> mergedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
         mergedMemory.add(this.lastChatResponse.getResult().getOutput());
-        mergedMemory.add(toolResponseMessage);
+        mergedMemory.add(this.toolResultTruncator.truncate(toolResponseMessage));
         this.chatMemory.clear(this.chatSessionId);
         this.chatMemory.add(this.chatSessionId, mergedMemory);
     }
@@ -698,6 +748,10 @@ public class AgentRuntime {
 
     public AgentLoopPolicy loopPolicy() {
         return loopPolicy;
+    }
+
+    public ContextBudgetPolicy contextBudgetPolicy() {
+        return contextBudgetPolicy;
     }
 
     PlanControlTool planControlTool() {

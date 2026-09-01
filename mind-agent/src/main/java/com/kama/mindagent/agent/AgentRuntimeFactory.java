@@ -1,6 +1,7 @@
 package com.kama.mindagent.agent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.kama.mindagent.agent.context.ContextBudgetPolicy;
 import com.kama.mindagent.agent.planning.PlanControlTool;
 import com.kama.mindagent.agent.planning.PlanningMode;
 import com.kama.mindagent.agent.tools.AgentTool;
@@ -50,6 +51,7 @@ public class AgentRuntimeFactory {
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
     private final AgentLoopPolicy loopPolicy;
+    private final ContextBudgetPolicy contextBudgetPolicy;
 
     public AgentRuntimeFactory(
             ChatClientRegistry chatClientRegistry,
@@ -72,7 +74,8 @@ public class AgentRuntimeFactory {
                 agentToolRegistry,
                 chatMessageFacadeService,
                 chatMessageConverter,
-                AgentLoopPolicy.defaults()
+                AgentLoopPolicy.defaults(),
+                ContextBudgetPolicy.defaults()
         );
     }
 
@@ -99,7 +102,10 @@ public class AgentRuntimeFactory {
                 agentToolRegistry,
                 chatMessageFacadeService,
                 chatMessageConverter,
-                runtimeProperties == null ? AgentLoopPolicy.defaults() : runtimeProperties.toPolicy()
+                runtimeProperties == null ? AgentLoopPolicy.defaults() : runtimeProperties.toPolicy(),
+                runtimeProperties == null
+                        ? ContextBudgetPolicy.defaults()
+                        : runtimeProperties.toContextBudgetPolicy()
         );
     }
 
@@ -113,7 +119,8 @@ public class AgentRuntimeFactory {
             AgentToolRegistry agentToolRegistry,
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter,
-            AgentLoopPolicy loopPolicy
+            AgentLoopPolicy loopPolicy,
+            ContextBudgetPolicy contextBudgetPolicy
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.agentEventStream = agentEventStream;
@@ -125,6 +132,9 @@ public class AgentRuntimeFactory {
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.loopPolicy = loopPolicy == null ? AgentLoopPolicy.defaults() : loopPolicy;
+        this.contextBudgetPolicy = contextBudgetPolicy == null
+                ? ContextBudgetPolicy.defaults()
+                : contextBudgetPolicy;
     }
 
     private Agent loadAgent(String agentId) {
@@ -144,10 +154,13 @@ public class AgentRuntimeFactory {
             ChatHistoryAnchor anchor
     ) {
         int messageLength = agentConfig.getChatOptions().getMessageLength();
+        int historyLimit = anchor != null && anchor.isValid()
+                ? Math.max(messageLength, contextBudgetPolicy.recentTurns() * 4 + 1)
+                : messageLength;
         List<ChatMessageDTO> chatMessages = anchor == null || !anchor.isValid()
                 ? chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength)
                 : chatMessageFacadeService.getChatMessagesBySessionIdRecently(
-                chatSessionId, messageLength, anchor);
+                chatSessionId, historyLimit, anchor);
         List<Message> memory = new ArrayList<>();
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             switch (chatMessageDTO.getRole()) {
@@ -298,7 +311,8 @@ public class AgentRuntimeFactory {
                 ToolCallingManager.builder().build(),
                 planningMode,
                 planControlTool,
-                loopPolicy
+                loopPolicy,
+                contextBudgetPolicy
         );
     }
 

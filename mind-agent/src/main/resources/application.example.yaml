@@ -43,3 +43,5 @@ mindagent:
       max-plan-revisions: 3
       max-tool-calls: 40
       max-run-duration: PT2M
+      max-tool-result-chars: 12000
+      recent-turns: 10
