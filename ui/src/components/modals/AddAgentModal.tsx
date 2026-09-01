@@ -32,6 +32,19 @@ const menuItems = [
   // { key: "memory", label: "全局记忆" },
 ];
 
+const zhipuEnabled = import.meta.env.VITE_ENABLE_ZHIPUAI === "true";
+const modelOptions = [
+  {
+    value: "deepseek-chat",
+    label: "deepseek-chat",
+  },
+  {
+    value: "glm-4.6",
+    label: zhipuEnabled ? "glm-4.6" : "glm-4.6（当前环境未启用）",
+    disabled: !zhipuEnabled,
+  },
+];
+
 const AddAgentModal: React.FC<AddAgentModalProps> = ({
   open,
   onClose,
@@ -195,16 +208,7 @@ const AddAgentModal: React.FC<AddAgentModalProps> = ({
                     选择模型
                   </label>
                   <Select
-                    options={[
-                      {
-                        value: "deepseek-chat",
-                        label: "deepseek-chat",
-                      },
-                      {
-                        value: "glm-4.6",
-                        label: "glm-4.6",
-                      },
-                    ]}
+                    options={modelOptions}
                     placeholder="请选择模型"
                     style={{ width: "300px" }}
                     value={formData.model}
@@ -212,6 +216,11 @@ const AddAgentModal: React.FC<AddAgentModalProps> = ({
                       setFormData({ ...formData, model: value })
                     }
                   />
+                  <p className="mt-2 text-xs text-gray-500">
+                    {zhipuEnabled
+                      ? "当前已启用 DeepSeek 和智谱模型。"
+                      : "当前环境仅启用 DeepSeek；配置 VITE_ENABLE_ZHIPUAI=true 后才可选择智谱模型。"}
+                  </p>
                 </div>
                 <div className="mb-4">
                   <label className="block text-gray-700 font-medium mb-2">

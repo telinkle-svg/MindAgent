@@ -1,35 +1,31 @@
-import React, { useState, useMemo } from "react";
-import { Card, Space, Typography, Select } from "antd";
+import React, { useMemo, useState } from "react";
+import { Card, message as antdMessage, Space, Typography, Select } from "antd";
 import {
   BulbOutlined,
   MessageOutlined,
   RobotOutlined,
   DownOutlined,
 } from "@ant-design/icons";
-import { Sender } from "@ant-design/x";
 import { useNavigate } from "react-router-dom";
 import {
   type AgentVO,
-  createChatMessage,
   createChatSession,
 } from "../../../api/api.ts";
 import { getAgentEmoji } from "../../../utils";
 import { useChatSessions } from "../../../hooks/useChatSessions.ts";
+import AgentChatInput from "./AgentChatInput.tsx";
+import type { PlanningMode } from "../../../types";
 
 const { Title, Text } = Typography;
 
-interface DefaultAgentChatViewProps {
-  handleSendMessage: (message: string) => void;
-  loading: boolean;
+interface EmptyAgentChatViewProps {
   agents: AgentVO[];
 }
 
-const EmptyAgentChatView: React.FC<DefaultAgentChatViewProps> = ({
-  loading,
-  agents,
-}) => {
-  const [message, setMessage] = useState("");
+const EmptyAgentChatView: React.FC<EmptyAgentChatViewProps> = ({ agents }) => {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("AUTO");
+  const [sending, setSending] = useState(false);
 
   const navigate = useNavigate();
   const { refreshChatSessions } = useChatSessions();
@@ -49,6 +45,36 @@ const EmptyAgentChatView: React.FC<DefaultAgentChatViewProps> = ({
     }
     return agents.length > 0 ? agents[0].id : null;
   }, [selectedAgentId, agents]);
+
+  const handleInitialSend = async (value: string) => {
+    const content = value.trim();
+    if (!content || sending) {
+      return;
+    }
+    if (!effectiveAgentId) {
+      antdMessage.warning("请先创建一个智能体助手");
+      return;
+    }
+
+    setSending(true);
+    try {
+      const sessionResponse = await createChatSession({
+        agentId: effectiveAgentId,
+        title: content.slice(0, 20),
+      });
+      await refreshChatSessions();
+
+      // 先进入会话页，由 AgentChatView 在 SSE 建立后提交一次性消息，避免错过规划事件。
+      navigate(`/chat/${sessionResponse.chatSessionId}`, {
+        state: { initialMessage: content, planningMode },
+      });
+    } catch (error) {
+      console.error("创建聊天会话失败:", error);
+      antdMessage.error("创建聊天会话或发送消息失败，请重试");
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -150,35 +176,12 @@ const EmptyAgentChatView: React.FC<DefaultAgentChatViewProps> = ({
         </div>
       </div>
       <div className="border-t border-gray-200 bg-white">
-        {/* 输入框 */}
         <div className="px-4 pb-4 pt-4">
-          <Sender
-            onSubmit={async () => {
-              if (!effectiveAgentId) return;
-              console.log("发送消息", message);
-              const response = await createChatSession({
-                agentId: effectiveAgentId,
-                title: message.slice(0, 20),
-              });
-              await createChatMessage({
-                sessionId: response.chatSessionId ?? "",
-                content: message,
-                role: "user",
-                agentId: effectiveAgentId,
-              });
-              // 刷新聊天会话列表
-              await refreshChatSessions();
-              setMessage("");
-              navigate(
-                `/chat/${response.chatSessionId}`,
-              );
-            }}
-            value={message}
-            loading={loading}
-            placeholder="输入消息开始对话..."
-            onChange={(value) => {
-              setMessage(value);
-            }}
+          <AgentChatInput
+            onSend={handleInitialSend}
+            loading={sending}
+            planningMode={planningMode}
+            onPlanningModeChange={setPlanningMode}
           />
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { get, post, patch, del, BASE_URL } from "./http.ts";
 import type { ApiResponse } from "./http.ts";
-import type { ChatMessageVO, MessageType } from "../types";
+import type { ChatMessageVO, MessageType, PlanningMode } from "../types";
 
 // 类型定义
 export interface ChatOptions {
@@ -183,6 +183,7 @@ export interface CreateChatMessageRequest {
   role: MessageType;
   content: string;
   metadata?: MetaData;
+  planningMode?: PlanningMode;
 }
 
 export interface CreateChatMessageResponse {

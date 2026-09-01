@@ -4,13 +4,22 @@ import XMarkdown from "@ant-design/x-markdown";
 import {
   ToolOutlined,
   CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  ExclamationCircleOutlined,
+  LoadingOutlined,
+  MinusCircleOutlined,
   RobotOutlined,
   DownOutlined,
   RightOutlined,
 } from "@ant-design/icons";
+import { Tag } from "antd";
 import type {
+  AgentErrorCode,
   ChatMessageVO,
   AgentEventType,
+  PlanSnapshot,
+  PlanStepStatus,
   ToolCall,
   ToolResponse,
 } from "../../../types";
@@ -21,7 +30,102 @@ interface AgentChatHistoryProps {
   agentStatusText?: string;
   agentStatusType?: AgentEventType;
   agentErrorText?: string;
+  agentErrorCode?: AgentErrorCode;
+  plan?: PlanSnapshot;
 }
+
+const planStatusConfig: Record<
+  PlanStepStatus,
+  { label: string; color: string; icon: React.ReactNode }
+> = {
+  BLOCKED: {
+    label: "阻塞",
+    color: "orange",
+    icon: <ExclamationCircleOutlined />,
+  },
+  READY: { label: "待执行", color: "default", icon: <ClockCircleOutlined /> },
+  IN_PROGRESS: {
+    label: "执行中",
+    color: "processing",
+    icon: <LoadingOutlined />,
+  },
+  COMPLETED: {
+    label: "已完成",
+    color: "success",
+    icon: <CheckCircleOutlined />,
+  },
+  FAILED: { label: "失败", color: "error", icon: <CloseCircleOutlined /> },
+  SKIPPED: {
+    label: "已跳过",
+    color: "default",
+    icon: <MinusCircleOutlined />,
+  },
+};
+
+const errorCodeLabels: Partial<Record<AgentErrorCode, string>> = {
+  AGENT_PROTOCOL_ERROR: "Agent 协议错误",
+  MODEL_CALL_FAILED: "模型调用失败",
+  TOOL_EXECUTION_FAILED: "工具执行失败",
+  FINAL_ANSWER_MISSING: "缺少最终答案",
+  MAX_STEPS_EXCEEDED: "超过最大迭代轮数",
+  PLAN_REQUIRED: "必须先创建计划",
+  PLAN_DISABLED: "当前会话已关闭规划",
+  PLAN_PROTOCOL_ERROR: "计划工具协议错误",
+  MAX_PLAN_REVISIONS_EXCEEDED: "超过计划修订次数",
+  MAX_MODEL_CALLS_EXCEEDED: "超过模型调用次数",
+  MAX_TOOL_CALLS_EXCEEDED: "超过工具调用次数",
+  MAX_RUN_DURATION_EXCEEDED: "执行超时",
+};
+
+const PlanProgress: React.FC<{ plan: PlanSnapshot }> = ({ plan }) => {
+  if (plan.steps.length === 0) {
+    return null;
+  }
+
+  const completedCount = plan.steps.filter(
+    (step) => step.status === "COMPLETED",
+  ).length;
+
+  return (
+    <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-medium text-blue-800">
+          <span>{plan.completed ? "执行计划（已完成）" : "执行计划"}</span>
+          <Tag color={plan.completed ? "success" : "processing"}>
+            {completedCount}/{plan.steps.length}
+          </Tag>
+        </div>
+        <span className="text-xs text-gray-500">
+          v{plan.version} · 修订 {plan.revisionCount} 次
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {plan.steps.map((step, index) => {
+          const status = planStatusConfig[step.status] ?? planStatusConfig.READY;
+          const isCurrent = step.id === plan.currentTaskId;
+          return (
+            <div
+              key={step.id || `${plan.version}-${index}`}
+              className={`flex items-center gap-2 rounded px-2 py-1 text-xs ${
+                isCurrent ? "bg-white shadow-sm" : ""
+              }`}
+              title={step.successCriteria || undefined}
+            >
+              <span className="w-4 text-center text-gray-400">{index + 1}</span>
+              <span className="min-w-0 flex-1 truncate text-gray-700">
+                {step.title}
+              </span>
+              {isCurrent && <span className="text-blue-600">当前</span>}
+              <Tag color={status.color} icon={status.icon}>
+                {status.label}
+              </Tag>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 // 工具调用展示组件（简化版，用于 assistant 消息内）
 const ToolCallDisplay: React.FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
@@ -96,7 +200,7 @@ const ToolResponseDisplay: React.FC<{ toolResponse: ToolResponse }> = ({
                 {JSON.stringify(parsedData, null, 2)}
               </pre>
             ) : (
-              <div className="whitespace-pre-wrap break-words">
+              <div className="whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
                 {toolResponse.responseData}
               </div>
             )}
@@ -113,6 +217,8 @@ const AgentChatHistory: React.FC<AgentChatHistoryProps> = ({
   agentStatusText = "",
   agentStatusType,
   agentErrorText,
+  agentErrorCode,
+  plan,
 }) => {
   // 滚动容器引用
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -207,6 +313,7 @@ const AgentChatHistory: React.FC<AgentChatHistoryProps> = ({
       ref={scrollContainerRef}
       className="flex-1 px-16 pt-4 overflow-y-scroll"
     >
+      {plan && <PlanProgress plan={plan} />}
       {messages.map((message) => {
         return (
           <div className="mb-4" key={message.id}>
@@ -303,8 +410,13 @@ const AgentChatHistory: React.FC<AgentChatHistoryProps> = ({
         <div className="mb-3" role="alert">
           <Bubble
             content={
-              <span className="font-medium text-red-600">
-                {agentErrorText}
+              <span className="flex items-center gap-2 font-medium text-red-600">
+                <span>{agentErrorText}</span>
+                {agentErrorCode && (
+                  <Tag color="error">
+                    {errorCodeLabels[agentErrorCode] ?? agentErrorCode}
+                  </Tag>
+                )}
               </span>
             }
             placement="start"

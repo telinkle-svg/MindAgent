@@ -133,7 +133,16 @@ npm install
 npm run dev
 ```
 
-前端默认地址为 `http://localhost:5173`。当前前端 API 地址写在 `ui/src/api/http.ts`，默认指向 `http://localhost:8080/api`。如果后端部署到其他主机或端口，需要同步调整该地址，或在网关层配置转发。
+前端默认地址为 `http://localhost:5173`，API 默认指向 `http://localhost:8080/api`。如果后端部署到其他主机或端口，请通过环境变量配置该地址，或在网关层配置转发。
+
+也可以在 `ui/.env.local` 中配置前端运行参数（参考 `ui/.env.example`）：
+
+```dotenv
+VITE_API_BASE_URL=http://localhost:8080/api
+VITE_ENABLE_ZHIPUAI=false
+```
+
+SSE 地址会根据 `VITE_API_BASE_URL` 自动推导；当前仅使用 DeepSeek 时保持 `VITE_ENABLE_ZHIPUAI=false`，启用智谱模型前再设置为 `true`。
 
 ## 构建和测试
 
@@ -149,6 +158,14 @@ cd mind-agent
 ```powershell
 cd ui
 npm run build
+```
+
+前端确定性测试：
+
+```powershell
+cd ui
+npm run test
+npm run lint
 ```
 
 涉及 PostgreSQL、模型服务或 Ollama 的集成测试，需要先准备相应的外部依赖和环境变量。

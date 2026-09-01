@@ -1,209 +1,394 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import React, {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { message as antdMessage } from "antd";
 import AgentChatHistory from "./agentChatView/AgentChatHistory.tsx";
 import AgentChatInput from "./agentChatView/AgentChatInput.tsx";
 import {
   createChatMessage,
-  createChatSession,
   getChatMessagesBySessionId,
   getChatSession,
 } from "../../api/api.ts";
+import { buildSseUrl } from "../../api/http.ts";
 import { useAgents } from "../../hooks/useAgents.ts";
-import { useChatSessions } from "../../hooks/useChatSessions.ts";
 import EmptyAgentChatView from "./agentChatView/EmptyAgentChatView.tsx";
-import type { AgentEvent, AgentEventType, ChatMessageVO } from "../../types";
+import type { AgentEvent, ChatMessageVO, PlanningMode } from "../../types";
+import {
+  createInitialAgentRunState,
+  hasPersistedFinalAnswer,
+  isAgentEvent,
+  reduceAgentRunState,
+} from "./agentChatView/agentEventReducer.ts";
+
+const RUN_RECOVERY_TIMEOUT_MS = 3 * 60 * 1000;
 
 const AgentChatView: React.FC = () => {
   const { chatSessionId } = useParams<{ chatSessionId: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
-  const { state } = useLocation();
-  const [loading, setLoading] = useState(false);
   const { agents } = useAgents();
-  const { refreshChatSessions } = useChatSessions();
+  const navigationState = location.state as
+    | { initialMessage?: unknown; planningMode?: unknown }
+    | null;
+  const initialMessage =
+    typeof navigationState?.initialMessage === "string"
+      ? navigationState.initialMessage.trim()
+      : "";
+  const initialPlanningMode: PlanningMode =
+    navigationState?.planningMode === "REQUIRED" ||
+    navigationState?.planningMode === "DISABLED"
+      ? navigationState.planningMode
+      : "AUTO";
+  const [sessionInfo, setSessionInfo] = useState<{
+    sessionId: string;
+    agentId: string;
+  } | null>(null);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("AUTO");
+  const [runState, dispatch] = useReducer(
+    reduceAgentRunState,
+    undefined,
+    createInitialAgentRunState,
+  );
+  const currentSessionIdRef = useRef(chatSessionId);
+  const initialSubmissionSessionRef = useRef<string | undefined>(undefined);
+  const activeUserMessageIdRef = useRef<string | undefined>(undefined);
+  const runRecoveryTimerRef = useRef<number | undefined>(undefined);
 
-  const [messages, setMessages] = useState<ChatMessageVO[]>([]);
-
-  const addMessage = useCallback((message: ChatMessageVO) => {
-    setMessages((prevMessages) => [...prevMessages, message]);
-  }, []);
-
-  const [agentId, setAgentId] = useState<string>("");
-
-  const getChatMessages = useCallback(async () => {
+  const refreshMessages = useCallback(async (): Promise<ChatMessageVO[]> => {
     if (!chatSessionId) {
-      return;
+      return [];
     }
-    const resp = await getChatMessagesBySessionId(chatSessionId);
-    setMessages(resp.chatMessages);
 
-    const fetchData = async () => {
-      const resp = await getChatSession(chatSessionId);
-      // setChatSession(resp.chatSession);
-      setAgentId(resp.chatSession.agentId);
-    };
-    fetchData().then();
+    const [messagesResponse, sessionResponse] = await Promise.all([
+      getChatMessagesBySessionId(chatSessionId),
+      getChatSession(chatSessionId),
+    ]);
+
+    // Ignore an older request that resolved after the user navigated to another session.
+    if (currentSessionIdRef.current !== chatSessionId) {
+      return [];
+    }
+
+    dispatch({
+      type: "mergeMessages",
+      messages: messagesResponse.chatMessages,
+    });
+    setSessionInfo({
+      sessionId: chatSessionId,
+      agentId: sessionResponse.chatSession.agentId,
+    });
+    return messagesResponse.chatMessages;
   }, [chatSessionId]);
 
-  useEffect(() => {
-    if (!chatSessionId) {
-      return;
+  const stopRunRecoveryTimer = useCallback(() => {
+    if (runRecoveryTimerRef.current !== undefined) {
+      window.clearTimeout(runRecoveryTimerRef.current);
+      runRecoveryTimerRef.current = undefined;
     }
-    getChatMessages().then();
-  }, [chatSessionId, getChatMessages]);
+  }, []);
 
-  const handleSendMessage = async (value: string | { text: string }) => {
-    // 处理 Sender 组件可能传递的不同格式
-    const message = typeof value === "string" ? value : value.text;
+  const beginRun = useCallback(
+    (sessionId: string) => {
+      dispatch({ type: "start" });
+      stopRunRecoveryTimer();
+      runRecoveryTimerRef.current = window.setTimeout(() => {
+        runRecoveryTimerRef.current = undefined;
+        if (currentSessionIdRef.current !== sessionId) {
+          return;
+        }
+        activeUserMessageIdRef.current = undefined;
+        dispatch({
+          type: "transportError",
+          message: "执行状态未知，请刷新会话后重试",
+        });
+      }, RUN_RECOVERY_TIMEOUT_MS);
+    },
+    [stopRunRecoveryTimer],
+  );
 
-    console.log(message);
-
-    if (!message || !message.trim()) return;
-
-    // 如果没有 chatSessionId，创建新会话
-    if (!chatSessionId) {
-      if (!agentId) {
-        antdMessage.warning("请先创建一个智能体助手");
+  const reconcilePersistedRun = useCallback(
+    (messages: ChatMessageVO[]) => {
+      if (
+        !chatSessionId ||
+        currentSessionIdRef.current !== chatSessionId ||
+        !hasPersistedFinalAnswer(messages, activeUserMessageIdRef.current)
+      ) {
         return;
       }
-      setLoading(true);
-      try {
-        const response = await createChatSession({
-          agentId: agentId,
-          title: message.slice(0, 20),
-        });
-        // 刷新聊天会话列表
-        await refreshChatSessions();
-        // 导航到新创建的会话
-        navigate(`/chat/${response.chatSessionId}`, {
-          replace: true,
-          // 携带初始化消息
-          state: {
-            init: false,
-            initMessage: message,
-          },
-        });
-      } catch (error) {
-        console.error("创建聊天会话失败:", error);
-        antdMessage.error("创建聊天会话失败，请重试");
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      if (state?.init) {
-        console.log("init", state.initMessage);
-        await createChatMessage({
-          agentId: agentId ?? "",
-          sessionId: chatSessionId,
-          role: "user",
-          content: state.initMessage ?? "",
-        });
-      } else {
-        console.log("ask", message);
-        await createChatMessage({
-          agentId: agentId ?? "",
-          sessionId: chatSessionId,
-          role: "user",
-          content: message,
-        });
-      }
-      await getChatMessages();
-    }
-  };
 
-  const [displayAgentStatus, setDisplayAgentStatus] = useState<boolean>(false);
-  const [agentStatusText, setAgentStatusText] = useState("");
-  const [agentStatusType, setAgentStatusType] = useState<
-    AgentEventType | undefined
-  >(undefined);
-  const [agentErrorText, setAgentErrorText] = useState<string | undefined>();
+      stopRunRecoveryTimer();
+      activeUserMessageIdRef.current = undefined;
+      dispatch({
+        type: "event",
+        event: { type: "AI_DONE", payload: { done: true } },
+      });
+    },
+    [chatSessionId, stopRunRecoveryTimer],
+  );
 
   useEffect(() => {
-    // sse 连接处理, 不是对话消息不开连接
+    currentSessionIdRef.current = chatSessionId;
+    initialSubmissionSessionRef.current = undefined;
+    activeUserMessageIdRef.current = undefined;
+    stopRunRecoveryTimer();
+    dispatch({ type: "reset" });
     if (!chatSessionId) {
       return;
     }
-    const es = new EventSource(
-      `http://localhost:8080/sse/connect/${chatSessionId}`,
-    );
-    es.onerror = (error) => {
-      console.warn("SSE transport error; EventSource will retry.", error);
-    };
 
-    es.addEventListener("message", (event) => {
-      try {
-        const eventMessage = JSON.parse(event.data) as AgentEvent;
-        if (eventMessage.type === "AI_GENERATED_CONTENT") {
-          if (eventMessage.payload.message) {
-            addMessage(eventMessage.payload.message);
+    const loadTimer = window.setTimeout(() => {
+      void refreshMessages().catch((error) => {
+        console.warn("Unable to load chat messages", error);
+      });
+    }, 0);
+    return () => {
+      window.clearTimeout(loadTimer);
+      stopRunRecoveryTimer();
+      activeUserMessageIdRef.current = undefined;
+    };
+  }, [chatSessionId, refreshMessages, stopRunRecoveryTimer]);
+
+  useEffect(() => {
+    if (
+      !chatSessionId ||
+      !initialMessage ||
+      sessionInfo?.sessionId !== chatSessionId ||
+      runState.sseReadySessionId !== chatSessionId ||
+      initialSubmissionSessionRef.current === chatSessionId
+    ) {
+      return;
+    }
+
+    const submitTimer = window.setTimeout(() => {
+      if (currentSessionIdRef.current !== chatSessionId) {
+        return;
+      }
+
+      initialSubmissionSessionRef.current = chatSessionId;
+      beginRun(chatSessionId);
+      void createChatMessage({
+        agentId: sessionInfo.agentId,
+        sessionId: chatSessionId,
+        role: "user",
+        content: initialMessage,
+        planningMode: initialPlanningMode,
+      })
+        .then((response) => {
+          if (currentSessionIdRef.current === chatSessionId) {
+            activeUserMessageIdRef.current = response.chatMessageId;
           }
-        } else if (
-          eventMessage.type === "AI_PLANNING" ||
-          eventMessage.type === "AI_THINKING" ||
-          eventMessage.type === "AI_EXECUTING"
-        ) {
-          setAgentErrorText(undefined);
-          setDisplayAgentStatus(true);
-          setAgentStatusText(eventMessage.payload.statusText ?? "");
-          setAgentStatusType(eventMessage.type);
-        } else if (eventMessage.type === "AI_ERROR") {
-          setDisplayAgentStatus(false);
-          setAgentStatusText("");
-          setAgentStatusType(undefined);
-          setAgentErrorText(eventMessage.payload.statusText ?? "执行失败，请重试");
-        } else if (eventMessage.type === "AI_DONE") {
-          setDisplayAgentStatus(false);
-          setAgentStatusText("");
-          setAgentStatusType(undefined);
-        } else {
-          console.warn("Unknown SSE message type", eventMessage.type);
+          return refreshMessages();
+        })
+        .then((messages) => reconcilePersistedRun(messages))
+        .catch((error) => {
+          if (currentSessionIdRef.current !== chatSessionId) {
+            return;
+          }
+          console.error("发送初始聊天消息失败:", error);
+          stopRunRecoveryTimer();
+          activeUserMessageIdRef.current = undefined;
+          dispatch({
+            type: "transportError",
+            message: "消息发送失败，请重试",
+          });
+          antdMessage.error("消息发送失败，请重试");
+        })
+        .finally(() => {
+          if (currentSessionIdRef.current !== chatSessionId) {
+            return;
+          }
+          // Remove the one-shot navigation payload so a browser refresh cannot
+          // submit the same initial message a second time.
+          navigate(location.pathname, { replace: true, state: null });
+        });
+    }, 0);
+
+    return () => window.clearTimeout(submitTimer);
+  }, [
+    chatSessionId,
+    initialMessage,
+    initialPlanningMode,
+    location.pathname,
+    navigate,
+    beginRun,
+    refreshMessages,
+    reconcilePersistedRun,
+    sessionInfo,
+    runState.sseReadySessionId,
+    stopRunRecoveryTimer,
+  ]);
+
+  const handleSendMessage = useCallback(
+    async (value: string) => {
+      const content = value.trim();
+      if (!content || !chatSessionId) {
+        return;
+      }
+      if (initialMessage) {
+        antdMessage.info("首条消息正在提交，请稍候");
+        return;
+      }
+      if (runState.sseReadySessionId !== chatSessionId) {
+        antdMessage.info("正在建立实时连接，请稍候");
+        return;
+      }
+      if (runState.active) {
+        antdMessage.info("智能体正在执行，请等待本轮完成");
+        return;
+      }
+      const agentId =
+        sessionInfo?.sessionId === chatSessionId ? sessionInfo.agentId : "";
+      if (!agentId) {
+        antdMessage.warning("会话信息尚未加载完成，请稍后重试");
+        return;
+      }
+
+      beginRun(chatSessionId);
+      try {
+        const response = await createChatMessage({
+          agentId,
+          sessionId: chatSessionId,
+          role: "user",
+          content,
+          planningMode,
+        });
+        if (currentSessionIdRef.current === chatSessionId) {
+          activeUserMessageIdRef.current = response.chatMessageId;
+        }
+        // The GET response is merged, rather than replacing the live stream,
+        // so an SSE event cannot be lost to an in-flight refresh.
+        const messages = await refreshMessages();
+        reconcilePersistedRun(messages);
+      } catch (error) {
+        if (currentSessionIdRef.current !== chatSessionId) {
+          return;
+        }
+        console.error("发送聊天消息失败:", error);
+        stopRunRecoveryTimer();
+        activeUserMessageIdRef.current = undefined;
+        dispatch({
+          type: "transportError",
+          message: "消息发送失败，请重试",
+        });
+        antdMessage.error("消息发送失败，请重试");
+      }
+    },
+    [
+      chatSessionId,
+      beginRun,
+      initialMessage,
+      planningMode,
+      reconcilePersistedRun,
+      refreshMessages,
+      runState.active,
+      runState.sseReadySessionId,
+      sessionInfo,
+      stopRunRecoveryTimer,
+    ],
+  );
+
+  useEffect(() => {
+    // 没有会话时不建立 SSE 连接；新会话页面由 EmptyAgentChatView 负责创建。
+    if (!chatSessionId) {
+      return;
+    }
+
+    const eventSource = new EventSource(buildSseUrl(chatSessionId));
+    const handleSseError = (error: Event) => {
+      console.warn("SSE transport error; EventSource will retry.", error);
+      if (currentSessionIdRef.current === chatSessionId) {
+        dispatch({ type: "sseLost", sessionId: chatSessionId });
+      }
+    };
+    const handleMessage = (event: MessageEvent<string>) => {
+      if (currentSessionIdRef.current !== chatSessionId) {
+        return;
+      }
+      try {
+        const parsed = JSON.parse(event.data) as unknown;
+        if (!isAgentEvent(parsed)) {
+          console.warn("Ignoring unknown SSE message", parsed);
+          return;
+        }
+
+        const agentEvent = parsed as AgentEvent;
+        dispatch({ type: "event", event: agentEvent });
+        if (agentEvent.type === "AI_DONE" || agentEvent.type === "AI_ERROR") {
+          stopRunRecoveryTimer();
+          activeUserMessageIdRef.current = undefined;
+          void refreshMessages().catch((error) => {
+            console.warn("Unable to refresh persisted messages", error);
+          });
         }
       } catch (error) {
         console.warn("Ignoring malformed SSE message", error);
       }
-    });
+    };
+    const handleInit = () => {
+      if (currentSessionIdRef.current !== chatSessionId) {
+        return;
+      }
+      // Do not clear a currently running status on reconnect; init is a transport
+      // event, not an agent lifecycle event.
+      dispatch({ type: "sseReady", sessionId: chatSessionId });
+      void refreshMessages()
+        .then((messages) => reconcilePersistedRun(messages))
+        .catch((error) => {
+          console.warn(
+            "Unable to refresh persisted chat messages after SSE init",
+            error,
+          );
+        });
+    };
 
-    es.addEventListener("init", () => {
-      setDisplayAgentStatus(false);
-      setAgentStatusText("");
-      setAgentStatusType(undefined);
-      setAgentErrorText(undefined);
-      void getChatMessages().catch((error) => {
-        console.warn(
-          "Unable to refresh persisted chat messages after SSE init",
-          error,
-        );
-      });
-    });
+    eventSource.addEventListener("error", handleSseError);
+    eventSource.addEventListener("message", handleMessage);
+    eventSource.addEventListener("init", handleInit);
 
     return () => {
-      es.close();
+      eventSource.removeEventListener("error", handleSseError);
+      eventSource.removeEventListener("message", handleMessage);
+      eventSource.removeEventListener("init", handleInit);
+      eventSource.close();
     };
-  }, [addMessage, chatSessionId, getChatMessages]);
+  }, [
+    chatSessionId,
+    reconcilePersistedRun,
+    refreshMessages,
+    stopRunRecoveryTimer,
+  ]);
 
-  // 如果没有 chatSessionId，显示提示界面
   if (!chatSessionId) {
-    return (
-      <EmptyAgentChatView
-        agents={agents}
-        loading={loading}
-        handleSendMessage={handleSendMessage}
-      />
-    );
+    return <EmptyAgentChatView agents={agents} />;
   }
 
-  // 如果有 chatSessionId，显示正常的聊天界面
   return (
     <div className="flex flex-col h-full">
       <AgentChatHistory
-        messages={messages}
-        displayAgentStatus={displayAgentStatus}
-        agentStatusText={agentStatusText}
-        agentStatusType={agentStatusType}
-        agentErrorText={agentErrorText}
+        messages={runState.messages}
+        displayAgentStatus={runState.active}
+        agentStatusText={runState.statusText}
+        agentStatusType={runState.statusType}
+        agentErrorText={runState.errorText}
+        agentErrorCode={runState.errorCode}
+        plan={runState.plan}
       />
       <div className="border-t border-gray-200 p-4 bg-white">
-        <AgentChatInput onSend={handleSendMessage} />
+        <AgentChatInput
+          onSend={handleSendMessage}
+          loading={
+            runState.active ||
+            Boolean(initialMessage) ||
+            runState.sseReadySessionId !== chatSessionId
+          }
+          planningMode={planningMode}
+          onPlanningModeChange={setPlanningMode}
+        />
       </div>
     </div>
   );
