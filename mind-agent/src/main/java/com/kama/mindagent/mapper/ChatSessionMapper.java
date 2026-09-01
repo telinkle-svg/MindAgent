@@ -2,6 +2,7 @@ package com.kama.mindagent.mapper;
 
 import com.kama.mindagent.model.entity.ChatSession;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
@@ -24,4 +25,6 @@ public interface ChatSessionMapper {
     int deleteById(String id);
 
     int updateById(ChatSession chatSession);
+
+    int updateMetadataById(@Param("id") String id, @Param("metadata") String metadata);
 }

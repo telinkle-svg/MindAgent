@@ -1,6 +1,8 @@
 package com.kama.mindagent.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.kama.mindagent.agent.context.ConversationSummary;
+import com.kama.mindagent.agent.context.SessionContextMetadata;
 import com.kama.mindagent.converter.ChatSessionConverter;
 import com.kama.mindagent.exception.BizException;
 import com.kama.mindagent.mapper.AgentMapper;
@@ -155,6 +157,45 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
             }
         } catch (JsonProcessingException e) {
             throw BizException.internalServerError("更新聊天会话时发生序列化错误: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public ChatSessionDTO.MetaData getChatSessionMetadata(String chatSessionId) {
+        ChatSession chatSession = chatSessionMapper.selectById(chatSessionId);
+        if (chatSession == null) {
+            throw BizException.notFound("聊天会话不存在: " + chatSessionId);
+        }
+        try {
+            ChatSessionDTO dto = chatSessionConverter.toDTO(chatSession);
+            return dto.getMetadata();
+        } catch (JsonProcessingException e) {
+            throw BizException.internalServerError("读取聊天会话上下文失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void updateChatSessionSummary(String chatSessionId, ConversationSummary summary) {
+        if (summary == null) {
+            return;
+        }
+        ChatSession existingChatSession = chatSessionMapper.selectById(chatSessionId);
+        if (existingChatSession == null) {
+            throw BizException.notFound("聊天会话不存在: " + chatSessionId);
+        }
+        try {
+            ChatSessionDTO dto = chatSessionConverter.toDTO(existingChatSession);
+            dto.setMetadata(SessionContextMetadata.mergeSummary(dto.getMetadata(), summary));
+            ChatSession updated = chatSessionConverter.toEntity(dto);
+            int result = chatSessionMapper.updateMetadataById(
+                    existingChatSession.getId(),
+                    updated.getMetadata()
+            );
+            if (result <= 0) {
+                throw BizException.internalServerError("更新聊天会话摘要失败");
+            }
+        } catch (JsonProcessingException e) {
+            throw BizException.internalServerError("更新聊天会话摘要时发生序列化错误: " + e.getMessage());
         }
     }
 

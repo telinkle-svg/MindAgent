@@ -95,4 +95,11 @@
         </set>
         WHERE id = CAST(#{id} AS uuid)
     </update>
+
+    <update id="updateMetadataById">
+        UPDATE chat_session
+        SET metadata = CAST(#{metadata} AS jsonb),
+            updated_at = NOW()
+        WHERE id = CAST(#{id} AS uuid)
+    </update>
 </mapper>

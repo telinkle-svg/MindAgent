@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.mindagent.agent.context.ContextBudgetPolicy;
 import com.kama.mindagent.agent.context.ConversationContextAssembler;
+import com.kama.mindagent.agent.context.ConversationSummary;
+import com.kama.mindagent.agent.context.ConversationSummarizer;
 import com.kama.mindagent.agent.context.ToolResultTruncator;
 import com.kama.mindagent.agent.planning.PlanControlTool;
 import com.kama.mindagent.agent.planning.PlanAction;
@@ -86,6 +88,10 @@ public class AgentRuntime {
     private ContextBudgetPolicy contextBudgetPolicy = ContextBudgetPolicy.defaults();
     private ConversationContextAssembler contextAssembler = new ConversationContextAssembler(contextBudgetPolicy);
     private ToolResultTruncator toolResultTruncator = new ToolResultTruncator(contextBudgetPolicy.maxToolResultChars());
+    private ConversationSummary sessionSummary;
+    private java.util.function.Consumer<ConversationSummary> summaryPersister;
+    private String summaryAnchorId;
+    private boolean summaryAttempted;
     private final AgentRunMetrics runMetrics = new AgentRunMetrics();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -258,7 +264,10 @@ public class AgentRuntime {
                 planningMode,
                 planControlTool,
                 loopPolicy,
-                ContextBudgetPolicy.defaults()
+                ContextBudgetPolicy.defaults(),
+                null,
+                null,
+                null
         );
     }
 
@@ -281,6 +290,53 @@ public class AgentRuntime {
               AgentLoopPolicy loopPolicy,
               ContextBudgetPolicy contextBudgetPolicy
     ) {
+        this(
+                agentId,
+                name,
+                description,
+                systemPrompt,
+                agentChatGateway,
+                maxMessages,
+                memory,
+                availableTools,
+                availableKbs,
+                chatSessionId,
+                agentEventStream,
+                chatMessageFacadeService,
+                chatMessageConverter,
+                toolCallingManager,
+                planningMode,
+                planControlTool,
+                loopPolicy,
+                contextBudgetPolicy,
+                null,
+                null,
+                null
+        );
+    }
+
+    AgentRuntime(String agentId,
+              String name,
+              String description,
+              String systemPrompt,
+              ModelResponseGateway agentChatGateway,
+              Integer maxMessages,
+              List<Message> memory,
+              List<ToolCallback> availableTools,
+              List<KnowledgeBaseDTO> availableKbs,
+              String chatSessionId,
+              AgentEventStream agentEventStream,
+              ChatMessageFacadeService chatMessageFacadeService,
+              ChatMessageConverter chatMessageConverter,
+              ToolCallingManager toolCallingManager,
+              PlanningMode planningMode,
+              PlanControlTool planControlTool,
+              AgentLoopPolicy loopPolicy,
+              ContextBudgetPolicy contextBudgetPolicy,
+              ConversationSummary sessionSummary,
+              java.util.function.Consumer<ConversationSummary> summaryPersister,
+              String summaryAnchorId
+    ) {
         this.agentId = agentId;
         this.name = name;
         this.description = description;
@@ -302,8 +358,11 @@ public class AgentRuntime {
         this.contextBudgetPolicy = contextBudgetPolicy == null
                 ? ContextBudgetPolicy.defaults()
                 : contextBudgetPolicy;
-        this.contextAssembler = new ConversationContextAssembler(this.contextBudgetPolicy);
+        this.sessionSummary = sessionSummary;
+        this.contextAssembler = new ConversationContextAssembler(this.contextBudgetPolicy, sessionSummary);
         this.toolResultTruncator = new ToolResultTruncator(this.contextBudgetPolicy.maxToolResultChars());
+        this.summaryPersister = summaryPersister;
+        this.summaryAnchorId = summaryAnchorId;
 
         this.agentState = AgentLifecycleState.IDLE;
 
@@ -311,7 +370,7 @@ public class AgentRuntime {
         int configuredMaxMessages = maxMessages == null ? DEFAULT_MAX_MESSAGES : maxMessages;
         int contextMemoryCapacity = Math.max(
                 configuredMaxMessages,
-                this.contextBudgetPolicy.recentTurns() * 4 + 10
+                this.contextBudgetPolicy.recentTurns() * 6 + 10
         );
         this.chatMemory = MessageWindowChatMemory.builder()
                 .maxMessages(contextMemoryCapacity)
@@ -471,7 +530,7 @@ public class AgentRuntime {
         // 又能够避免将 thinkPrompt 加入到聊天记录中
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
-                .messages(this.contextAssembler.assemble(this.chatMemory.get(this.chatSessionId)))
+                .messages(assembleContext())
                 .build();
 
         loopPolicy.ensureDuration(runMetrics.startedAt());
@@ -548,7 +607,7 @@ public class AgentRuntime {
         }
 
         Prompt prompt = Prompt.builder()
-                .messages(this.contextAssembler.assemble(this.chatMemory.get(this.chatSessionId)))
+                .messages(assembleContext())
                 .chatOptions(this.chatOptions)
                 .build();
 
@@ -752,6 +811,37 @@ public class AgentRuntime {
 
     public ContextBudgetPolicy contextBudgetPolicy() {
         return contextBudgetPolicy;
+    }
+
+    private List<Message> assembleContext() {
+        List<Message> fullMemory = this.chatMemory.get(this.chatSessionId);
+        ConversationContextAssembler.AssemblyResult result =
+                this.contextAssembler.assembleWithStats(fullMemory);
+        if (result.omittedTurns() == 0 || summaryPersister == null || summaryAttempted) {
+            return result.messages();
+        }
+
+        summaryAttempted = true;
+        try {
+            loopPolicy.ensureDuration(runMetrics.startedAt());
+            loopPolicy.ensureModelCallAllowed(runMetrics.modelCalls() + 1);
+            runMetrics.recordModelCall();
+            ConversationSummary nextSummary = new ConversationSummarizer(this.agentChatGateway)
+                    .summarize(
+                            this.contextAssembler.omittedMessages(fullMemory),
+                            this.sessionSummary,
+                            this.summaryAnchorId
+                    );
+            summaryPersister.accept(nextSummary);
+            this.sessionSummary = nextSummary;
+            this.contextAssembler = this.contextAssembler.withSummary(nextSummary);
+            return this.contextAssembler.assemble(fullMemory);
+        } catch (RuntimeException exception) {
+            // A summary is an optimization, not a prerequisite for the run.
+            // Keep the prior summary and continue with the bounded window.
+            log.warn("Unable to update session summary for {}", this.chatSessionId, exception);
+            return result.messages();
+        }
     }
 
     PlanControlTool planControlTool() {

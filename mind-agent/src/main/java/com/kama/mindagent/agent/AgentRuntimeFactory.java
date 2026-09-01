@@ -2,6 +2,8 @@ package com.kama.mindagent.agent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.kama.mindagent.agent.context.ContextBudgetPolicy;
+import com.kama.mindagent.agent.context.ConversationSummary;
+import com.kama.mindagent.agent.context.SessionContextMetadata;
 import com.kama.mindagent.agent.planning.PlanControlTool;
 import com.kama.mindagent.agent.planning.PlanningMode;
 import com.kama.mindagent.agent.tools.AgentTool;
@@ -21,6 +23,7 @@ import com.kama.mindagent.model.request.ChatHistoryAnchor;
 import com.kama.mindagent.service.ChatMessageFacadeService;
 import com.kama.mindagent.service.AgentEventStream;
 import com.kama.mindagent.service.AgentToolRegistry;
+import com.kama.mindagent.service.ChatSessionFacadeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -50,6 +53,7 @@ public class AgentRuntimeFactory {
     private final AgentToolRegistry agentToolRegistry;
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
+    private final ChatSessionFacadeService chatSessionFacadeService;
     private final AgentLoopPolicy loopPolicy;
     private final ContextBudgetPolicy contextBudgetPolicy;
 
@@ -74,6 +78,7 @@ public class AgentRuntimeFactory {
                 agentToolRegistry,
                 chatMessageFacadeService,
                 chatMessageConverter,
+                null,
                 AgentLoopPolicy.defaults(),
                 ContextBudgetPolicy.defaults()
         );
@@ -90,6 +95,7 @@ public class AgentRuntimeFactory {
             AgentToolRegistry agentToolRegistry,
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter,
+            ChatSessionFacadeService chatSessionFacadeService,
             AgentRuntimeProperties runtimeProperties
     ) {
         this(
@@ -102,6 +108,7 @@ public class AgentRuntimeFactory {
                 agentToolRegistry,
                 chatMessageFacadeService,
                 chatMessageConverter,
+                chatSessionFacadeService,
                 runtimeProperties == null ? AgentLoopPolicy.defaults() : runtimeProperties.toPolicy(),
                 runtimeProperties == null
                         ? ContextBudgetPolicy.defaults()
@@ -119,6 +126,7 @@ public class AgentRuntimeFactory {
             AgentToolRegistry agentToolRegistry,
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter,
+            ChatSessionFacadeService chatSessionFacadeService,
             AgentLoopPolicy loopPolicy,
             ContextBudgetPolicy contextBudgetPolicy
     ) {
@@ -131,6 +139,7 @@ public class AgentRuntimeFactory {
         this.agentToolRegistry = agentToolRegistry;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
+        this.chatSessionFacadeService = chatSessionFacadeService;
         this.loopPolicy = loopPolicy == null ? AgentLoopPolicy.defaults() : loopPolicy;
         this.contextBudgetPolicy = contextBudgetPolicy == null
                 ? ContextBudgetPolicy.defaults()
@@ -155,7 +164,7 @@ public class AgentRuntimeFactory {
     ) {
         int messageLength = agentConfig.getChatOptions().getMessageLength();
         int historyLimit = anchor != null && anchor.isValid()
-                ? Math.max(messageLength, contextBudgetPolicy.recentTurns() * 4 + 1)
+                ? Math.max(messageLength, contextBudgetPolicy.recentTurns() * 6 + 10)
                 : messageLength;
         List<ChatMessageDTO> chatMessages = anchor == null || !anchor.isValid()
                 ? chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength)
@@ -288,7 +297,10 @@ public class AgentRuntimeFactory {
             List<ToolCallback> toolCallbacks,
             String chatSessionId,
             PlanningMode planningMode,
-            PlanControlTool planControlTool
+            PlanControlTool planControlTool,
+            ConversationSummary sessionSummary,
+            java.util.function.Consumer<ConversationSummary> summaryPersister,
+            String summaryAnchorId
     ) {
         ChatClient chatClient = chatClientRegistry.get(agent.getModel());
         if (Objects.isNull(chatClient)) {
@@ -312,7 +324,10 @@ public class AgentRuntimeFactory {
                 planningMode,
                 planControlTool,
                 loopPolicy,
-                contextBudgetPolicy
+                contextBudgetPolicy,
+                sessionSummary,
+                summaryPersister,
+                summaryAnchorId
         );
     }
 
@@ -332,6 +347,12 @@ public class AgentRuntimeFactory {
                 runRequest.userMessageCreatedAt()
         );
         List<Message> memory = loadMemory(agentConfig, runRequest.sessionId(), anchor);
+        ConversationSummary sessionSummary = loadSessionSummary(runRequest.sessionId());
+        java.util.function.Consumer<ConversationSummary> summaryPersister =
+                chatSessionFacadeService == null
+                        ? null
+                        : summary -> chatSessionFacadeService.updateChatSessionSummary(
+                        runRequest.sessionId(), summary);
 
         // 解析 agent 的支持的知识库
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
@@ -355,7 +376,24 @@ public class AgentRuntimeFactory {
                 toolCallbacks,
                 runRequest.sessionId(),
                 planningMode,
-                planControlTool
+                planControlTool,
+                sessionSummary,
+                summaryPersister,
+                runRequest.userMessageId()
         );
+    }
+
+    private ConversationSummary loadSessionSummary(String chatSessionId) {
+        if (chatSessionFacadeService == null) {
+            return null;
+        }
+        try {
+            return SessionContextMetadata.readSummary(
+                    chatSessionFacadeService.getChatSessionMetadata(chatSessionId)
+            );
+        } catch (RuntimeException exception) {
+            log.warn("Unable to load session summary for {}", chatSessionId, exception);
+            return null;
+        }
     }
 }

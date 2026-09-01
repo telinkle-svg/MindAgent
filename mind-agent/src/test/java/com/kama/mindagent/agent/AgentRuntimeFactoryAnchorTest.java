@@ -75,12 +75,12 @@ class AgentRuntimeFactoryAnchorTest {
         when(chatClientRegistry.get("deepseek-chat")).thenReturn(mock(ChatClient.class));
         when(agentToolRegistry.listRequired()).thenReturn(List.of());
         when(chatMessageFacadeService.getChatMessagesBySessionIdRecently(
-                "session-1", 41, anchor)).thenReturn(List.of());
+                "session-1", 70, anchor)).thenReturn(List.of());
 
         factory.createRuntime(request);
 
         verify(chatMessageFacadeService).getChatMessagesBySessionIdRecently(
-                "session-1", 41, anchor);
+                "session-1", 70, anchor);
         verify(chatMessageFacadeService, never()).getChatMessagesBySessionIdRecently("session-1", 7);
     }
 }

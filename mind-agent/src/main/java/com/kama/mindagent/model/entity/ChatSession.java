@@ -17,7 +17,7 @@ public class ChatSession {
 
     private String title;
 
-    // JSON string
+    // JSON string; session-context summary fields are stored inside this JSONB value.
     private String metadata;
 
     private LocalDateTime createdAt;
