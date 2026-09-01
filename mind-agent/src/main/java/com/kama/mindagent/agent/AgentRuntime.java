@@ -1,5 +1,7 @@
 package com.kama.mindagent.agent;
 
+import com.kama.mindagent.agent.planning.PlanControlTool;
+import com.kama.mindagent.agent.planning.PlanningMode;
 import com.kama.mindagent.converter.ChatMessageConverter;
 import com.kama.mindagent.message.AgentEvent;
 import com.kama.mindagent.model.dto.ChatMessageDTO;
@@ -66,6 +68,10 @@ public class AgentRuntime {
     // 模型的聊天会话 ID
     private String chatSessionId;
 
+    // Per-run planning mode and control tool; never shared by the factory.
+    private PlanningMode planningMode;
+    private PlanControlTool planControlTool;
+
     // 最多循环次数
     private static final Integer MAX_STEPS = 20;
 
@@ -118,7 +124,9 @@ public class AgentRuntime {
                 agentEventStream,
                 chatMessageFacadeService,
                 chatMessageConverter,
-                ToolCallingManager.builder().build()
+                ToolCallingManager.builder().build(),
+                PlanningMode.AUTO,
+                null
         );
     }
 
@@ -137,6 +145,43 @@ public class AgentRuntime {
               ChatMessageConverter chatMessageConverter,
               ToolCallingManager toolCallingManager
     ) {
+        this(
+                agentId,
+                name,
+                description,
+                systemPrompt,
+                agentChatGateway,
+                maxMessages,
+                memory,
+                availableTools,
+                availableKbs,
+                chatSessionId,
+                agentEventStream,
+                chatMessageFacadeService,
+                chatMessageConverter,
+                toolCallingManager,
+                PlanningMode.AUTO,
+                null
+        );
+    }
+
+    AgentRuntime(String agentId,
+              String name,
+              String description,
+              String systemPrompt,
+              ModelResponseGateway agentChatGateway,
+              Integer maxMessages,
+              List<Message> memory,
+              List<ToolCallback> availableTools,
+              List<KnowledgeBaseDTO> availableKbs,
+              String chatSessionId,
+              AgentEventStream agentEventStream,
+              ChatMessageFacadeService chatMessageFacadeService,
+              ChatMessageConverter chatMessageConverter,
+              ToolCallingManager toolCallingManager,
+              PlanningMode planningMode,
+              PlanControlTool planControlTool
+    ) {
         this.agentId = agentId;
         this.name = name;
         this.description = description;
@@ -152,6 +197,8 @@ public class AgentRuntime {
 
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
+        this.planningMode = PlanningMode.fromNullable(planningMode);
+        this.planControlTool = planControlTool;
 
         this.agentState = AgentLifecycleState.IDLE;
 
@@ -448,6 +495,14 @@ public class AgentRuntime {
                 publishStatus(AgentEvent.Type.AI_DONE, "任务完成");
             }
         }
+    }
+
+    PlanControlTool planControlTool() {
+        return planControlTool;
+    }
+
+    PlanningMode planningMode() {
+        return planningMode;
     }
 
     @Override

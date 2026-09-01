@@ -1,5 +1,6 @@
 package com.kama.mindagent.event.listener;
 
+import com.kama.mindagent.agent.AgentRunRequest;
 import com.kama.mindagent.agent.AgentRuntime;
 import com.kama.mindagent.agent.AgentRuntimeFactory;
 import com.kama.mindagent.event.ChatEvent;
@@ -42,7 +43,22 @@ public class ChatEventListener {
     }
 
     private void execute(ChatEvent event) {
-        AgentRuntime agentRuntime = agentRuntimeFactory.createRuntime(event.getAgentId(), event.getSessionId());
+        AgentRuntime agentRuntime;
+        if (event.getUserMessageId() == null
+                && event.getUserMessageCreatedAt() == null
+                && event.getPlanningMode() == com.kama.mindagent.agent.planning.PlanningMode.AUTO) {
+            // Preserve the legacy factory path for callers using the compatibility event constructor.
+            agentRuntime = agentRuntimeFactory.createRuntime(event.getAgentId(), event.getSessionId());
+        } else {
+            agentRuntime = agentRuntimeFactory.createRuntime(new AgentRunRequest(
+                    event.getAgentId(),
+                    event.getSessionId(),
+                    event.getUserMessageId(),
+                    event.getUserMessageCreatedAt(),
+                    event.getPlanningMode(),
+                    event.getUserInput()
+            ));
+        }
         agentRuntime.execute();
     }
 }

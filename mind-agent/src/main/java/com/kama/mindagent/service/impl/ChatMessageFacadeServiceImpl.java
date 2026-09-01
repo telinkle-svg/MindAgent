@@ -78,6 +78,9 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
         publisher.publishEvent(new ChatEvent(
                         request.getAgentId(),
                         chatMessage.getSessionId(),
+                        chatMessage.getId(),
+                        chatMessage.getCreatedAt(),
+                        com.kama.mindagent.agent.planning.PlanningMode.fromNullable(request.getPlanningMode()),
                         chatMessage.getContent()
                 )
         );

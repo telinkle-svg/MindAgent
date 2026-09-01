@@ -1,6 +1,8 @@
 package com.kama.mindagent.agent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.kama.mindagent.agent.planning.PlanControlTool;
+import com.kama.mindagent.agent.planning.PlanningMode;
 import com.kama.mindagent.agent.tools.AgentTool;
 import com.kama.mindagent.config.ChatClientRegistry;
 import com.kama.mindagent.converter.AgentConverter;
@@ -20,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.*;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
@@ -178,6 +181,12 @@ public class AgentRuntimeFactory {
         return callbacks;
     }
 
+    private List<ToolCallback> buildPlanToolCallbacks(PlanControlTool planControlTool) {
+        return Arrays.asList(MethodToolCallbackProvider.builder()
+                .toolObjects(planControlTool)
+                .build()
+                .getToolCallbacks());
+    }
     private Object resolveToolTarget(AgentTool tool) {
         try {
             return AopUtils.isAopProxy(tool)
@@ -195,7 +204,9 @@ public class AgentRuntimeFactory {
             List<Message> memory,
             List<KnowledgeBaseDTO> knowledgeBases,
             List<ToolCallback> toolCallbacks,
-            String chatSessionId
+            String chatSessionId,
+            PlanningMode planningMode,
+            PlanControlTool planControlTool
     ) {
         ChatClient chatClient = chatClientRegistry.get(agent.getModel());
         if (Objects.isNull(chatClient)) {
@@ -206,7 +217,7 @@ public class AgentRuntimeFactory {
                 agent.getName(),
                 agent.getDescription(),
                 agent.getSystemPrompt(),
-                chatClient,
+                new SpringAiResponseGateway(chatClient),
                 agentConfig.getChatOptions().getMessageLength(),
                 memory,
                 toolCallbacks,
@@ -214,7 +225,10 @@ public class AgentRuntimeFactory {
                 chatSessionId,
                 agentEventStream,
                 chatMessageFacadeService,
-                chatMessageConverter
+                chatMessageConverter,
+                ToolCallingManager.builder().build(),
+                planningMode,
+                planControlTool
         );
     }
 
@@ -222,16 +236,28 @@ public class AgentRuntimeFactory {
      * 创建一个 AgentRuntime 实例
      */
     public AgentRuntime createRuntime(String agentId, String chatSessionId) {
-        Agent agent = loadAgent(agentId);
+        return createRuntime(AgentRunRequest.auto(agentId, chatSessionId));
+    }
+
+    public AgentRuntime createRuntime(AgentRunRequest runRequest) {
+        Objects.requireNonNull(runRequest, "runRequest cannot be null");
+        Agent agent = loadAgent(runRequest.agentId());
         AgentDTO agentConfig = toAgentConfig(agent);
-        List<Message> memory = loadMemory(agentConfig, chatSessionId);
+        List<Message> memory = loadMemory(agentConfig, runRequest.sessionId());
 
         // 解析 agent 的支持的知识库
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
         // 解析 agent 支持的工具调用
         List<AgentTool> runtimeTools = resolveRuntimeTools(agentConfig);
-        // 将工具调用转换成 ToolCallback 的形式
+        // 将普通工具调用转换成 ToolCallback 的形式
         List<ToolCallback> toolCallbacks = buildToolCallbacks(runtimeTools);
+
+        PlanningMode planningMode = PlanningMode.fromNullable(runRequest.planningMode());
+        PlanControlTool planControlTool = null;
+        if (planningMode != PlanningMode.DISABLED) {
+            planControlTool = new PlanControlTool();
+            toolCallbacks.addAll(buildPlanToolCallbacks(planControlTool));
+        }
 
         return assembleRuntime(
                 agent,
@@ -239,7 +265,9 @@ public class AgentRuntimeFactory {
                 memory,
                 knowledgeBases,
                 toolCallbacks,
-                chatSessionId
+                runRequest.sessionId(),
+                planningMode,
+                planControlTool
         );
     }
 }
