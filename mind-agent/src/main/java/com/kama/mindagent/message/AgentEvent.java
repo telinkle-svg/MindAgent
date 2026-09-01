@@ -1,5 +1,6 @@
 package com.kama.mindagent.message;
 
+import com.kama.mindagent.agent.planning.PlanSnapshot;
 import com.kama.mindagent.model.vo.ChatMessageVO;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -15,13 +16,32 @@ public class AgentEvent {
     private Metadata metadata;
 
     @Data
-    @AllArgsConstructor
     @Builder
     public static class Payload {
         private ChatMessageVO message;
         private String statusText;
         private Boolean done;
         private String errorCode;
+        private PlanSnapshot plan;
+
+        public Payload(
+                ChatMessageVO message,
+                String statusText,
+                Boolean done,
+                String errorCode,
+                PlanSnapshot plan
+        ) {
+            this.message = message;
+            this.statusText = statusText;
+            this.done = done;
+            this.errorCode = errorCode;
+            this.plan = plan;
+        }
+
+        /** Compatibility constructor for clients compiled against the old payload shape. */
+        public Payload(ChatMessageVO message, String statusText, Boolean done, String errorCode) {
+            this(message, statusText, done, errorCode, null);
+        }
     }
 
     @Data
@@ -43,6 +63,8 @@ public class AgentEvent {
         AI_THINKING,
         AI_EXECUTING,
         AI_ERROR,
+        PLAN_CREATED,
+        PLAN_UPDATED,
         AI_DONE,
     }
 }

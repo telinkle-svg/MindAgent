@@ -1,6 +1,14 @@
 package com.kama.mindagent.agent;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.mindagent.agent.planning.PlanControlTool;
+import com.kama.mindagent.agent.planning.PlanAction;
+import com.kama.mindagent.agent.planning.PlanCommand;
+import com.kama.mindagent.agent.planning.PlanSnapshot;
+import com.kama.mindagent.agent.planning.PlanStep;
+import com.kama.mindagent.agent.planning.PlanToolResult;
+import com.kama.mindagent.agent.planning.PlanValidator;
 import com.kama.mindagent.agent.planning.PlanningMode;
 import com.kama.mindagent.converter.ChatMessageConverter;
 import com.kama.mindagent.message.AgentEvent;
@@ -71,9 +79,9 @@ public class AgentRuntime {
     // Per-run planning mode and control tool; never shared by the factory.
     private PlanningMode planningMode;
     private PlanControlTool planControlTool;
-
-    // 最多循环次数
-    private static final Integer MAX_STEPS = 20;
+    private AgentLoopPolicy loopPolicy = AgentLoopPolicy.defaults();
+    private final AgentRunMetrics runMetrics = new AgentRunMetrics();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final Integer DEFAULT_MAX_MESSAGES = 20;
 
@@ -126,7 +134,8 @@ public class AgentRuntime {
                 chatMessageConverter,
                 ToolCallingManager.builder().build(),
                 PlanningMode.AUTO,
-                null
+                null,
+                AgentLoopPolicy.defaults()
         );
     }
 
@@ -161,7 +170,8 @@ public class AgentRuntime {
                 chatMessageConverter,
                 toolCallingManager,
                 PlanningMode.AUTO,
-                null
+                null,
+                AgentLoopPolicy.defaults()
         );
     }
 
@@ -182,6 +192,45 @@ public class AgentRuntime {
               PlanningMode planningMode,
               PlanControlTool planControlTool
     ) {
+        this(
+                agentId,
+                name,
+                description,
+                systemPrompt,
+                agentChatGateway,
+                maxMessages,
+                memory,
+                availableTools,
+                availableKbs,
+                chatSessionId,
+                agentEventStream,
+                chatMessageFacadeService,
+                chatMessageConverter,
+                toolCallingManager,
+                planningMode,
+                planControlTool,
+                AgentLoopPolicy.defaults()
+        );
+    }
+
+    AgentRuntime(String agentId,
+              String name,
+              String description,
+              String systemPrompt,
+              ModelResponseGateway agentChatGateway,
+              Integer maxMessages,
+              List<Message> memory,
+              List<ToolCallback> availableTools,
+              List<KnowledgeBaseDTO> availableKbs,
+              String chatSessionId,
+              AgentEventStream agentEventStream,
+              ChatMessageFacadeService chatMessageFacadeService,
+              ChatMessageConverter chatMessageConverter,
+              ToolCallingManager toolCallingManager,
+              PlanningMode planningMode,
+              PlanControlTool planControlTool,
+              AgentLoopPolicy loopPolicy
+    ) {
         this.agentId = agentId;
         this.name = name;
         this.description = description;
@@ -199,6 +248,7 @@ public class AgentRuntime {
         this.chatMessageConverter = chatMessageConverter;
         this.planningMode = PlanningMode.fromNullable(planningMode);
         this.planControlTool = planControlTool;
+        this.loopPolicy = loopPolicy == null ? AgentLoopPolicy.defaults() : loopPolicy;
 
         this.agentState = AgentLifecycleState.IDLE;
 
@@ -364,6 +414,10 @@ public class AgentRuntime {
                 .messages(this.chatMemory.get(this.chatSessionId))
                 .build();
 
+        loopPolicy.ensureDuration(runMetrics.startedAt());
+        loopPolicy.ensureModelCallAllowed(runMetrics.modelCalls() + 1);
+        runMetrics.recordModelCall();
+
         AssistantMessage output;
         try {
             this.lastChatResponse = this.agentChatGateway.request(
@@ -404,7 +458,34 @@ public class AgentRuntime {
             return;
         }
 
+        loopPolicy.ensureDuration(runMetrics.startedAt());
+        List<AssistantMessage.ToolCall> toolCalls = extractToolCalls(
+                this.lastChatResponse.getResult().getOutput());
+        loopPolicy.ensureToolCallsAllowed(runMetrics.toolCalls() + toolCalls.size());
+        runMetrics.recordToolCalls(toolCalls.size());
+
+        List<AssistantMessage.ToolCall> planCalls = toolCalls.stream()
+                .filter(this::isPlanToolCall)
+                .toList();
+        boolean hasPlanCall = !planCalls.isEmpty();
+        boolean hasOrdinaryCall = toolCalls.stream().anyMatch(call -> !isPlanToolCall(call));
+        if ((hasPlanCall && hasOrdinaryCall) || planCalls.size() > 1) {
+            throw new AgentExecutionException(AgentFailureCode.PLAN_PROTOCOL_ERROR);
+        }
+        if (hasPlanCall && (planningMode == PlanningMode.DISABLED || planControlTool == null)) {
+            throw new AgentExecutionException(AgentFailureCode.PLAN_DISABLED);
+        }
+        if (!hasPlanCall && planningMode == PlanningMode.REQUIRED
+                && (planControlTool == null || !planControlTool.currentSnapshot().exists())) {
+            throw new AgentExecutionException(AgentFailureCode.PLAN_REQUIRED);
+        }
+
         publishStatus(AgentEvent.Type.AI_EXECUTING, "执行中：正在调用工具处理...");
+
+        if (hasPlanCall) {
+            executePlanToolCall(planCalls.get(0));
+            return;
+        }
 
         Prompt prompt = Prompt.builder()
                 .messages(this.chatMemory.get(this.chatSessionId))
@@ -457,6 +538,114 @@ public class AgentRuntime {
         }
     }
 
+    private boolean isPlanToolCall(AssistantMessage.ToolCall toolCall) {
+        return toolCall != null && PlanControlTool.TOOL_NAME.equals(toolCall.name());
+    }
+
+    private void executePlanToolCall(AssistantMessage.ToolCall toolCall) {
+        loopPolicy.ensurePlanRevisionAllowed(runMetrics.planRevisions() + 1);
+        runMetrics.recordPlanCall();
+
+        PlanCommand command;
+        PlanToolResult result;
+        try {
+            JsonNode arguments = objectMapper.readTree(toolCall.arguments());
+            if (arguments == null || arguments.isNull()) {
+                throw new IllegalArgumentException("plan arguments must be a JSON object");
+            }
+            JsonNode commandNode = arguments.has("command")
+                    ? arguments.get("command")
+                    : arguments;
+            command = objectMapper.treeToValue(commandNode, PlanCommand.class);
+            if (command == null) {
+                throw new IllegalArgumentException("plan command must be provided");
+            }
+            result = planControlTool.managePlan(command);
+            String responseData = objectMapper.writeValueAsString(result);
+            ToolResponseMessage toolResponseMessage = ToolResponseMessage.builder()
+                    .responses(List.of(new ToolResponseMessage.ToolResponse(
+                            toolCall.id(),
+                            PlanControlTool.TOOL_NAME,
+                            responseData
+                    )))
+                    .build();
+
+            appendToolResponseToMemory(toolResponseMessage);
+            persistMessage(toolResponseMessage);
+            publishPendingMessages();
+
+            if (result.accepted()) {
+                runMetrics.recordPlanRevision();
+                AgentEvent.Type eventType = command.action() == PlanAction.CREATE
+                        ? AgentEvent.Type.PLAN_CREATED
+                        : AgentEvent.Type.PLAN_UPDATED;
+                publishPlanEvent(eventType, planControlTool.currentSnapshot());
+            }
+        } catch (AgentExecutionException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new AgentExecutionException(AgentFailureCode.PLAN_PROTOCOL_ERROR, exception);
+        }
+    }
+
+    private void appendToolResponseToMemory(ToolResponseMessage toolResponseMessage) {
+        List<Message> mergedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
+        mergedMemory.add(this.lastChatResponse.getResult().getOutput());
+        mergedMemory.add(toolResponseMessage);
+        this.chatMemory.clear(this.chatSessionId);
+        this.chatMemory.add(this.chatSessionId, mergedMemory);
+    }
+
+    private void publishPlanEvent(AgentEvent.Type type, PlanSnapshot snapshot) {
+        AgentEvent event = AgentEvent.builder()
+                .type(type)
+                .payload(AgentEvent.Payload.builder()
+                        .plan(boundPlanSnapshot(snapshot))
+                        .build())
+                .build();
+        agentEventStream.publish(this.chatSessionId, event);
+    }
+
+    private PlanSnapshot boundPlanSnapshot(PlanSnapshot snapshot) {
+        if (snapshot == null) {
+            return PlanSnapshot.empty();
+        }
+        List<PlanStep> steps = snapshot.steps() == null
+                ? List.of()
+                : snapshot.steps().stream()
+                .filter(java.util.Objects::nonNull)
+                .limit(PlanValidator.MAX_STEPS)
+                .map(step -> new PlanStep(
+                        bound(step.id(), 80),
+                        bound(step.title(), 200),
+                        step.dependsOn() == null
+                                ? List.of()
+                                : step.dependsOn().stream()
+                                .filter(java.util.Objects::nonNull)
+                                .map(dependency -> bound(dependency, 80))
+                                .limit(20)
+                                .toList(),
+                        step.status(),
+                        bound(step.successCriteria(), 500)
+                ))
+                .toList();
+        return new PlanSnapshot(
+                bound(snapshot.planId(), 80),
+                snapshot.version(),
+                steps,
+                bound(snapshot.currentTaskId(), 80),
+                snapshot.revisionCount(),
+                snapshot.completed()
+        );
+    }
+
+    private String bound(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
+    }
+
     // 单个步骤模板
     private void advanceOneStep() {
         if (decideNextAction()) {
@@ -473,13 +662,17 @@ public class AgentRuntime {
         }
 
         try {
+            loopPolicy.ensureDuration(runMetrics.startedAt());
             publishStatus(AgentEvent.Type.AI_PLANNING, "规划中：正在拆解任务并制定执行计划...");
-            for (int i = 0; i < MAX_STEPS && agentState != AgentLifecycleState.FINISHED; i++) {
+            int iteration = 0;
+            while (agentState != AgentLifecycleState.FINISHED) {
                 // 当前步骤，用于实现 Agent Loop
+                loopPolicy.ensureDuration(runMetrics.startedAt());
+                int nextIteration = iteration + 1;
+                loopPolicy.ensureIterationAllowed(nextIteration);
+                iteration = nextIteration;
+                runMetrics.recordIteration();
                 advanceOneStep();
-            }
-            if (agentState != AgentLifecycleState.FINISHED) {
-                throw new AgentExecutionException(AgentFailureCode.MAX_STEPS_EXCEEDED);
             }
         } catch (Exception e) {
             agentState = AgentLifecycleState.ERROR;
@@ -489,12 +682,22 @@ public class AgentRuntime {
             log.error("Error running agent, errorCode={}",
                     agentException.getErrorCode(), e);
             publishFailure(agentException.getErrorCode());
+            runMetrics.markTerminal("error:" + agentException.getErrorCode().name());
             throw agentException;
         } finally {
             if (agentState == AgentLifecycleState.FINISHED) {
+                runMetrics.markTerminal("completed");
                 publishStatus(AgentEvent.Type.AI_DONE, "任务完成");
             }
         }
+    }
+
+    public AgentRunMetrics metrics() {
+        return runMetrics;
+    }
+
+    public AgentLoopPolicy loopPolicy() {
+        return loopPolicy;
     }
 
     PlanControlTool planControlTool() {

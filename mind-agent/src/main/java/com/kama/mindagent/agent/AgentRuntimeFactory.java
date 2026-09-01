@@ -5,6 +5,7 @@ import com.kama.mindagent.agent.planning.PlanControlTool;
 import com.kama.mindagent.agent.planning.PlanningMode;
 import com.kama.mindagent.agent.tools.AgentTool;
 import com.kama.mindagent.config.ChatClientRegistry;
+import com.kama.mindagent.config.AgentRuntimeProperties;
 import com.kama.mindagent.converter.AgentConverter;
 import com.kama.mindagent.converter.ChatMessageConverter;
 import com.kama.mindagent.converter.KnowledgeBaseConverter;
@@ -26,6 +27,7 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -46,6 +48,7 @@ public class AgentRuntimeFactory {
     private final AgentToolRegistry agentToolRegistry;
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
+    private final AgentLoopPolicy loopPolicy;
 
     public AgentRuntimeFactory(
             ChatClientRegistry chatClientRegistry,
@@ -58,6 +61,59 @@ public class AgentRuntimeFactory {
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter
     ) {
+        this(
+                chatClientRegistry,
+                agentEventStream,
+                agentMapper,
+                agentConverter,
+                knowledgeBaseMapper,
+                knowledgeBaseConverter,
+                agentToolRegistry,
+                chatMessageFacadeService,
+                chatMessageConverter,
+                AgentLoopPolicy.defaults()
+        );
+    }
+
+    @Autowired
+    public AgentRuntimeFactory(
+            ChatClientRegistry chatClientRegistry,
+            AgentEventStream agentEventStream,
+            AgentMapper agentMapper,
+            AgentConverter agentConverter,
+            KnowledgeBaseMapper knowledgeBaseMapper,
+            KnowledgeBaseConverter knowledgeBaseConverter,
+            AgentToolRegistry agentToolRegistry,
+            ChatMessageFacadeService chatMessageFacadeService,
+            ChatMessageConverter chatMessageConverter,
+            AgentRuntimeProperties runtimeProperties
+    ) {
+        this(
+                chatClientRegistry,
+                agentEventStream,
+                agentMapper,
+                agentConverter,
+                knowledgeBaseMapper,
+                knowledgeBaseConverter,
+                agentToolRegistry,
+                chatMessageFacadeService,
+                chatMessageConverter,
+                runtimeProperties == null ? AgentLoopPolicy.defaults() : runtimeProperties.toPolicy()
+        );
+    }
+
+    private AgentRuntimeFactory(
+            ChatClientRegistry chatClientRegistry,
+            AgentEventStream agentEventStream,
+            AgentMapper agentMapper,
+            AgentConverter agentConverter,
+            KnowledgeBaseMapper knowledgeBaseMapper,
+            KnowledgeBaseConverter knowledgeBaseConverter,
+            AgentToolRegistry agentToolRegistry,
+            ChatMessageFacadeService chatMessageFacadeService,
+            ChatMessageConverter chatMessageConverter,
+            AgentLoopPolicy loopPolicy
+    ) {
         this.chatClientRegistry = chatClientRegistry;
         this.agentEventStream = agentEventStream;
         this.agentMapper = agentMapper;
@@ -67,6 +123,7 @@ public class AgentRuntimeFactory {
         this.agentToolRegistry = agentToolRegistry;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
+        this.loopPolicy = loopPolicy == null ? AgentLoopPolicy.defaults() : loopPolicy;
     }
 
     private Agent loadAgent(String agentId) {
@@ -228,7 +285,8 @@ public class AgentRuntimeFactory {
                 chatMessageConverter,
                 ToolCallingManager.builder().build(),
                 planningMode,
-                planControlTool
+                planControlTool,
+                loopPolicy
         );
     }
 

@@ -34,3 +34,12 @@ mybatis:
 document:
   storage:
     base-path: ${MINDAGENT_DOCUMENT_STORAGE_PATH:./data/documents}
+
+mindagent:
+  agent:
+    loop:
+      max-iterations: 20
+      max-model-calls: 20
+      max-plan-revisions: 3
+      max-tool-calls: 40
+      max-run-duration: PT2M
