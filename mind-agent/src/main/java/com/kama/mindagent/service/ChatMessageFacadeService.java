@@ -1,6 +1,7 @@
 package com.kama.mindagent.service;
 
 import com.kama.mindagent.model.dto.ChatMessageDTO;
+import com.kama.mindagent.model.request.ChatHistoryAnchor;
 import com.kama.mindagent.model.request.CreateChatMessageRequest;
 import com.kama.mindagent.model.request.UpdateChatMessageRequest;
 import com.kama.mindagent.model.response.CreateChatMessageResponse;
@@ -12,6 +13,12 @@ public interface ChatMessageFacadeService {
     GetChatMessagesResponse getChatMessagesBySessionId(String sessionId);
 
     List<ChatMessageDTO> getChatMessagesBySessionIdRecently(String sessionId, int limit);
+
+    default List<ChatMessageDTO> getChatMessagesBySessionIdRecently(
+            String sessionId, int limit, ChatHistoryAnchor anchor
+    ) {
+        return getChatMessagesBySessionIdRecently(sessionId, limit);
+    }
 
     CreateChatMessageResponse createChatMessage(CreateChatMessageRequest request);
 

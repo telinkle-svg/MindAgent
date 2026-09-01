@@ -16,6 +16,7 @@ import com.kama.mindagent.model.dto.ChatMessageDTO;
 import com.kama.mindagent.model.dto.KnowledgeBaseDTO;
 import com.kama.mindagent.model.entity.Agent;
 import com.kama.mindagent.model.entity.KnowledgeBase;
+import com.kama.mindagent.model.request.ChatHistoryAnchor;
 import com.kama.mindagent.service.ChatMessageFacadeService;
 import com.kama.mindagent.service.AgentEventStream;
 import com.kama.mindagent.service.AgentToolRegistry;
@@ -134,8 +135,19 @@ public class AgentRuntimeFactory {
      * 将数据库中存储的记忆恢复成 List<Message> 结构
      */
     private List<Message> loadMemory(AgentDTO agentConfig, String chatSessionId) {
+        return loadMemory(agentConfig, chatSessionId, null);
+    }
+
+    private List<Message> loadMemory(
+            AgentDTO agentConfig,
+            String chatSessionId,
+            ChatHistoryAnchor anchor
+    ) {
         int messageLength = agentConfig.getChatOptions().getMessageLength();
-        List<ChatMessageDTO> chatMessages = chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength);
+        List<ChatMessageDTO> chatMessages = anchor == null || !anchor.isValid()
+                ? chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength)
+                : chatMessageFacadeService.getChatMessagesBySessionIdRecently(
+                chatSessionId, messageLength, anchor);
         List<Message> memory = new ArrayList<>();
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             switch (chatMessageDTO.getRole()) {
@@ -301,7 +313,11 @@ public class AgentRuntimeFactory {
         Objects.requireNonNull(runRequest, "runRequest cannot be null");
         Agent agent = loadAgent(runRequest.agentId());
         AgentDTO agentConfig = toAgentConfig(agent);
-        List<Message> memory = loadMemory(agentConfig, runRequest.sessionId());
+        ChatHistoryAnchor anchor = new ChatHistoryAnchor(
+                runRequest.userMessageId(),
+                runRequest.userMessageCreatedAt()
+        );
+        List<Message> memory = loadMemory(agentConfig, runRequest.sessionId(), anchor);
 
         // 解析 agent 的支持的知识库
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);

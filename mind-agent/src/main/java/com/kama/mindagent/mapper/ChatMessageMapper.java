@@ -2,6 +2,7 @@ package com.kama.mindagent.mapper;
 
 import com.kama.mindagent.model.entity.ChatMessage;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
@@ -20,6 +21,13 @@ public interface ChatMessageMapper {
     List<ChatMessage> selectBySessionId(String sessionId);
 
     List<ChatMessage> selectBySessionIdRecently(String sessionId, int limit);
+
+    List<ChatMessage> selectBySessionIdRecentlyBefore(
+            @Param("sessionId") String sessionId,
+            @Param("anchorCreatedAt") java.time.LocalDateTime anchorCreatedAt,
+            @Param("anchorMessageId") String anchorMessageId,
+            @Param("limit") int limit
+    );
 
     int deleteById(String id);
 

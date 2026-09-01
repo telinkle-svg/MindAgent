@@ -9,6 +9,7 @@ import com.kama.mindagent.mapper.ChatMessageMapper;
 import com.kama.mindagent.mapper.ChatSessionMapper;
 import com.kama.mindagent.model.dto.ChatMessageDTO;
 import com.kama.mindagent.model.entity.ChatMessage;
+import com.kama.mindagent.model.request.ChatHistoryAnchor;
 import com.kama.mindagent.model.request.CreateChatMessageRequest;
 import com.kama.mindagent.model.request.UpdateChatMessageRequest;
 import com.kama.mindagent.model.response.CreateChatMessageResponse;
@@ -57,7 +58,34 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     @Override
     public List<ChatMessageDTO> getChatMessagesBySessionIdRecently(String sessionId, int limit) {
         List<ChatMessage> chatMessages = chatMessageMapper.selectBySessionIdRecently(sessionId, limit);
+        return toChatMessageDTOs(chatMessages);
+    }
+
+    @Override
+    public List<ChatMessageDTO> getChatMessagesBySessionIdRecently(
+            String sessionId,
+            int limit,
+            ChatHistoryAnchor anchor
+    ) {
+        List<ChatMessage> chatMessages;
+        if (anchor == null || !anchor.isValid()) {
+            chatMessages = chatMessageMapper.selectBySessionIdRecently(sessionId, limit);
+        } else {
+            chatMessages = chatMessageMapper.selectBySessionIdRecentlyBefore(
+                    sessionId,
+                    anchor.createdAt(),
+                    anchor.messageId(),
+                    limit
+            );
+        }
+        return toChatMessageDTOs(chatMessages);
+    }
+
+    private List<ChatMessageDTO> toChatMessageDTOs(List<ChatMessage> chatMessages) {
         List<ChatMessageDTO> result = new ArrayList<>();
+        if (chatMessages == null || chatMessages.isEmpty()) {
+            return result;
+        }
         for (ChatMessage chatMessage : chatMessages) {
             try {
                 ChatMessageDTO dto = chatMessageConverter.toDTO(chatMessage);
