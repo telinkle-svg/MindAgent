@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   createKnowledgeBase,
   deleteKnowledgeBase,
@@ -10,23 +10,34 @@ import {
 } from "../api/api.ts";
 import type { KnowledgeBase } from "../types";
 
+function convertKnowledgeBases(resp: GetKnowledgeBasesResponse): KnowledgeBase[] {
+  return resp.knowledgeBases.map((kb) => ({
+    knowledgeBaseId: kb.id,
+    name: kb.name,
+    description: kb.description || "",
+  }));
+}
+
 export function useKnowledgeBases() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
 
-  const convert = (resp: GetKnowledgeBasesResponse): KnowledgeBase[] =>
-    resp.knowledgeBases.map((kb) => ({
-      knowledgeBaseId: kb.id,
-      name: kb.name,
-      description: kb.description || "",
-    }));
-
-  async function refreshKnowledgeBases() {
+  const refreshKnowledgeBases = useCallback(async () => {
     const resp = await getKnowledgeBases();
-    setKnowledgeBases(convert(resp));
-  }
+    setKnowledgeBases(convertKnowledgeBases(resp));
+  }, []);
 
   useEffect(() => {
-    refreshKnowledgeBases().then();
+    let disposed = false;
+    void getKnowledgeBases()
+      .then((resp) => {
+        if (!disposed) {
+          setKnowledgeBases(convertKnowledgeBases(resp));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   async function createKnowledgeBaseHandle(
