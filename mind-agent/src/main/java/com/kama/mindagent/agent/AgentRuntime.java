@@ -700,7 +700,9 @@ public class AgentRuntime {
     private void appendToolResponseToMemory(ToolResponseMessage toolResponseMessage) {
         List<Message> mergedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
         mergedMemory.add(this.lastChatResponse.getResult().getOutput());
-        mergedMemory.add(this.toolResultTruncator.truncate(toolResponseMessage));
+        ToolResponseMessage bounded = this.toolResultTruncator.truncate(toolResponseMessage);
+        runMetrics.recordToolResultTruncations(countTruncatedToolResults(toolResponseMessage));
+        mergedMemory.add(bounded);
         this.chatMemory.clear(this.chatSessionId);
         this.chatMemory.add(this.chatSessionId, mergedMemory);
     }
@@ -713,6 +715,21 @@ public class AgentRuntime {
                         .build())
                 .build();
         agentEventStream.publish(this.chatSessionId, event);
+    }
+
+    private int countTruncatedToolResults(ToolResponseMessage message) {
+        if (message == null || message.getResponses() == null
+                || message.getResponses().isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (ToolResponseMessage.ToolResponse response : message.getResponses()) {
+            if (response != null && response.responseData() != null
+                    && response.responseData().length() > contextBudgetPolicy.maxToolResultChars()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private PlanSnapshot boundPlanSnapshot(PlanSnapshot snapshot) {
@@ -817,12 +834,14 @@ public class AgentRuntime {
         List<Message> fullMemory = this.chatMemory.get(this.chatSessionId);
         ConversationContextAssembler.AssemblyResult result =
                 this.contextAssembler.assembleWithStats(fullMemory);
+        recordContext(result);
         if (result.omittedTurns() == 0 || summaryPersister == null || summaryAttempted) {
             return result.messages();
         }
 
         summaryAttempted = true;
         try {
+            runMetrics.recordSummaryAttempt();
             loopPolicy.ensureDuration(runMetrics.startedAt());
             loopPolicy.ensureModelCallAllowed(runMetrics.modelCalls() + 1);
             runMetrics.recordModelCall();
@@ -835,13 +854,56 @@ public class AgentRuntime {
             summaryPersister.accept(nextSummary);
             this.sessionSummary = nextSummary;
             this.contextAssembler = this.contextAssembler.withSummary(nextSummary);
-            return this.contextAssembler.assemble(fullMemory);
+            ConversationContextAssembler.AssemblyResult summarized =
+                    this.contextAssembler.assembleWithStats(fullMemory);
+            recordContext(summarized);
+            return summarized.messages();
         } catch (RuntimeException exception) {
             // A summary is an optimization, not a prerequisite for the run.
             // Keep the prior summary and continue with the bounded window.
+            runMetrics.recordSummaryFailure();
             log.warn("Unable to update session summary for {}", this.chatSessionId, exception);
             return result.messages();
         }
+    }
+
+    private void recordContext(ConversationContextAssembler.AssemblyResult result) {
+        runMetrics.recordContext(
+                contextCharacters(result.messages()),
+                result.omittedTurns(),
+                result.truncatedToolResults()
+        );
+    }
+
+    private int contextCharacters(List<Message> messages) {
+        long total = 0;
+        for (Message message : messages) {
+            if (message == null) {
+                continue;
+            }
+            total += textLength(message.getText());
+            if (message instanceof AssistantMessage assistantMessage) {
+                for (AssistantMessage.ToolCall toolCall : extractToolCalls(assistantMessage)) {
+                    total += textLength(toolCall.id());
+                    total += textLength(toolCall.name());
+                    total += textLength(toolCall.arguments());
+                }
+            } else if (message instanceof ToolResponseMessage toolResponseMessage
+                    && toolResponseMessage.getResponses() != null) {
+                for (ToolResponseMessage.ToolResponse response : toolResponseMessage.getResponses()) {
+                    total += textLength(response.name());
+                    total += textLength(response.responseData());
+                }
+            }
+            if (total >= Integer.MAX_VALUE) {
+                return Integer.MAX_VALUE;
+            }
+        }
+        return (int) total;
+    }
+
+    private int textLength(String value) {
+        return value == null ? 0 : value.length();
     }
 
     PlanControlTool planControlTool() {

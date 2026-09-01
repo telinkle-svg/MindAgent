@@ -16,6 +16,13 @@ public final class AgentRunMetrics {
     private int planRevisions;
     private int toolCalls;
     private String terminalReason;
+    private int contextAssemblies;
+    private long totalContextChars;
+    private int maxContextChars;
+    private int maxOmittedTurns;
+    private int truncatedToolResults;
+    private int summaryAttempts;
+    private int summaryFailures;
 
     public AgentRunMetrics() {
         this(Instant.now());
@@ -47,6 +54,35 @@ public final class AgentRunMetrics {
         }
     }
 
+    public synchronized void recordContext(
+            int contextChars,
+            int omittedTurns,
+            int truncatedToolResults
+    ) {
+        contextAssemblies++;
+        int boundedChars = Math.max(0, contextChars);
+        totalContextChars += boundedChars;
+        maxContextChars = Math.max(maxContextChars, boundedChars);
+        maxOmittedTurns = Math.max(maxOmittedTurns, Math.max(0, omittedTurns));
+        if (truncatedToolResults > 0) {
+            this.truncatedToolResults += truncatedToolResults;
+        }
+    }
+
+    public synchronized void recordToolResultTruncations(int count) {
+        if (count > 0) {
+            truncatedToolResults += count;
+        }
+    }
+
+    public synchronized void recordSummaryAttempt() {
+        summaryAttempts++;
+    }
+
+    public synchronized void recordSummaryFailure() {
+        summaryFailures++;
+    }
+
     public synchronized void markTerminal(String reason) {
         terminalReason = reason;
     }
@@ -75,6 +111,34 @@ public final class AgentRunMetrics {
         return toolCalls;
     }
 
+    public synchronized int contextAssemblies() {
+        return contextAssemblies;
+    }
+
+    public synchronized long totalContextChars() {
+        return totalContextChars;
+    }
+
+    public synchronized int maxContextChars() {
+        return maxContextChars;
+    }
+
+    public synchronized int maxOmittedTurns() {
+        return maxOmittedTurns;
+    }
+
+    public synchronized int truncatedToolResults() {
+        return truncatedToolResults;
+    }
+
+    public synchronized int summaryAttempts() {
+        return summaryAttempts;
+    }
+
+    public synchronized int summaryFailures() {
+        return summaryFailures;
+    }
+
     public Duration elapsed() {
         return Duration.between(startedAt, Instant.now());
     }
@@ -91,6 +155,13 @@ public final class AgentRunMetrics {
                 planCalls,
                 planRevisions,
                 toolCalls,
+                contextAssemblies,
+                totalContextChars,
+                maxContextChars,
+                maxOmittedTurns,
+                truncatedToolResults,
+                summaryAttempts,
+                summaryFailures,
                 elapsed(),
                 terminalReason
         );
@@ -103,6 +174,13 @@ public final class AgentRunMetrics {
             int planCalls,
             int planRevisions,
             int toolCalls,
+            int contextAssemblies,
+            long totalContextChars,
+            int maxContextChars,
+            int maxOmittedTurns,
+            int truncatedToolResults,
+            int summaryAttempts,
+            int summaryFailures,
             Duration elapsed,
             String terminalReason
     ) {
