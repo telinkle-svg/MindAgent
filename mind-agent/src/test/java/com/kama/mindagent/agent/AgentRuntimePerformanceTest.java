@@ -50,6 +50,7 @@ class AgentRuntimePerformanceTest {
     private static final int SUMMARY_RUNS = 20;
     private static final int CONCURRENT_RUNS = 20;
     private static final Duration MAX_RUN_DURATION = Duration.ofSeconds(5);
+    private static final int PERFORMANCE_SCHEMA_VERSION = 1;
 
     @Test
     @Timeout(value = 60)
@@ -73,6 +74,7 @@ class AgentRuntimePerformanceTest {
     @Test
     @Timeout(value = 60)
     void multiStepRunsMeasureToolAndContextBudgetOverhead() {
+        IntStream.range(0, 5).forEach(index -> runMultiStep(index));
         ScenarioResult result = measure("multi-step", MULTI_STEP_RUNS, this::runMultiStep);
 
         assertCompleted(result, MULTI_STEP_RUNS);
@@ -92,6 +94,7 @@ class AgentRuntimePerformanceTest {
     @Test
     @Timeout(value = 60)
     void longContextRunsMeasureIncrementalSummaryOverhead() {
+        IntStream.range(0, 5).forEach(index -> runSummary(index));
         ScenarioResult result = measure("summary", SUMMARY_RUNS, this::runSummary);
 
         assertCompleted(result, SUMMARY_RUNS);
@@ -349,11 +352,29 @@ class AgentRuntimePerformanceTest {
                 totalSummaryAttempts
         );
         Path file = Path.of("target", "performance-baseline-" + result.name() + ".txt");
+        Path jsonFile = Path.of("target", "performance-baseline-" + result.name() + ".json");
+        PerformanceReport jsonReport = PerformanceReport.from(
+                result,
+                p50,
+                p95,
+                p99,
+                totalContextChars,
+                maxContextChars,
+                totalTruncated,
+                totalSummaryAttempts
+        );
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(
                     file,
                     report,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE
+            );
+            Files.writeString(
+                    jsonFile,
+                    new ObjectMapper().writeValueAsString(jsonReport) + System.lineSeparator(),
                     StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE
@@ -403,6 +424,73 @@ class AgentRuntimePerformanceTest {
                     .mapToLong(Sample::elapsedNanos)
                     .max()
                     .orElse(0L);
+        }
+    }
+
+    /** Fixed-shape, machine-readable companion to the human-readable TXT baseline. */
+    private record PerformanceReport(
+            int schemaVersion,
+            String scenario,
+            int runs,
+            double p50Ms,
+            double p95Ms,
+            double p99Ms,
+            double maxMs,
+            long totalContextChars,
+            int maxContextChars,
+            int totalTruncatedToolResults,
+            int totalSummaryAttempts,
+            int totalSummaryFailures,
+            int terminalSuccesses,
+            int terminalFailures,
+            java.util.Map<String, Integer> terminalReasons
+    ) {
+        private static PerformanceReport from(
+                ScenarioResult result,
+                long p50,
+                long p95,
+                long p99,
+                long totalContextChars,
+                int maxContextChars,
+                int totalTruncated,
+                int totalSummaryAttempts
+        ) {
+            java.util.Map<String, Integer> terminalReasons = new java.util.TreeMap<>();
+            int terminalSuccesses = 0;
+            int terminalFailures = 0;
+            int totalSummaryFailures = 0;
+            for (Sample sample : result.samples()) {
+                String reason = sample.metrics().terminalReason();
+                String normalizedReason = reason == null || reason.isBlank() ? "unknown" : reason;
+                terminalReasons.merge(normalizedReason, 1, Integer::sum);
+                if ("completed".equals(normalizedReason)) {
+                    terminalSuccesses++;
+                } else {
+                    terminalFailures++;
+                }
+                totalSummaryFailures += sample.metrics().summaryFailures();
+            }
+            return new PerformanceReport(
+                    PERFORMANCE_SCHEMA_VERSION,
+                    result.name(),
+                    result.samples().size(),
+                    nanosToMillis(p50),
+                    nanosToMillis(p95),
+                    nanosToMillis(p99),
+                    nanosToMillis(result.maxElapsedNanos()),
+                    totalContextChars,
+                    maxContextChars,
+                    totalTruncated,
+                    totalSummaryAttempts,
+                    totalSummaryFailures,
+                    terminalSuccesses,
+                    terminalFailures,
+                    terminalReasons
+            );
+        }
+
+        private static double nanosToMillis(long nanos) {
+            return nanos / 1_000_000.0;
         }
     }
 }
