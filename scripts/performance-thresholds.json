@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "minRuns": {
+    "simple": 100,
+    "multi-step": 20,
+    "summary": 20,
+    "concurrent": 20
+  },
+  "latencyMs": {
+    "p95": 10,
+    "p99": 20,
+    "max": 5000
+  },
+  "relativeRegressionPercent": {
+    "warning": {
+      "p95": 20,
+      "p99": 20,
+      "max": 20
+    },
+    "failure": {
+      "p95": 50,
+      "p99": 50,
+      "max": 50
+    }
+  }
+}
