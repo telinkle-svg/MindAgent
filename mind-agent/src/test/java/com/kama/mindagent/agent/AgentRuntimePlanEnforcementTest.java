@@ -233,6 +233,7 @@ class AgentRuntimePlanEnforcementTest {
         assertThat(callCount).hasValue(4);
         assertThat(runtime.metrics().planCalls()).isEqualTo(3);
         assertThat(runtime.metrics().planRevisions()).isEqualTo(3);
+        assertThat(planTool.currentSnapshot().completed()).isTrue();
         assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
                 .containsSubsequence(AgentEvent.Type.PLAN_CREATED,
                         AgentEvent.Type.PLAN_UPDATED,
