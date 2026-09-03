@@ -15,6 +15,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.model.tool.ToolExecutionResult;
+import org.springframework.ai.model.tool.ToolExecutionResult;
 
 import java.time.Duration;
 import java.util.List;
@@ -25,14 +27,68 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class AgentRuntimePlanEnforcementTest {
 
-    private static final String CREATE_ARGUMENTS = "{\"command\":{\"action\":\"CREATE\","
+    private static final String CREATE_ARGUMENTS = "{\"command\":{\"action\":\"CREATE\"," 
             + "\"version\":1,\"steps\":[{\"id\":\"step-1\",\"title\":\"查找资料\","
             + "\"dependsOn\":[],\"status\":\"IN_PROGRESS\","
             + "\"successCriteria\":\"找到可引用资料\"}],"
             + "\"currentTaskId\":\"step-1\",\"observation\":\"开始执行\"}}";
+
+    @Test
+    void autoModeAllowsFinalTextWithoutPlan() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantText("无需计划的回答")));
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(gateway, mock(ToolCallingManager.class), sse,
+                PlanningMode.AUTO, new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .last().isEqualTo(AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void autoModeAllowsOrdinaryToolAfterPlanThenFinalText() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, CREATE_ARGUMENTS),
+                AgentTestMessages.assistantToolCall("tool-1", "databaseQuery", "{\"sql\":\"SELECT 1\"}"),
+                AgentTestMessages.assistantText("工具完成")));
+        ToolCallingManager manager = mockToolManager("tool-1", "databaseQuery", "结果");
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(gateway, manager, sse, PlanningMode.AUTO,
+                new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        verify(manager).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .last().isEqualTo(AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void requiredModeAllowsCreateOrdinaryCompleteThenFinalText() {
+        String completedPlan = CREATE_ARGUMENTS.replace("IN_PROGRESS", "COMPLETED");
+        String complete = "{\"command\":{\"action\":\"COMPLETE\",\"version\":1}}";
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, completedPlan),
+                AgentTestMessages.assistantToolCall("tool-1", "databaseQuery", "{\"sql\":\"SELECT 1\"}"),
+                AgentTestMessages.assistantToolCall("plan-2", PlanControlTool.TOOL_NAME, complete),
+                AgentTestMessages.assistantText("计划完成")));
+        ToolCallingManager manager = mockToolManager("tool-1", "databaseQuery", "结果");
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(gateway, manager, sse, PlanningMode.REQUIRED,
+                new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        verify(manager).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .last().isEqualTo(AgentEvent.Type.AI_DONE);
+    }
 
     @Test
     void requiredModeRejectsOrdinaryToolBeforePlanCreation() {
@@ -115,6 +171,135 @@ class AgentRuntimePlanEnforcementTest {
     }
 
     @Test
+    void autoModeAllowsFinalAnswerWithoutPlan() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantText("无需拆解即可回答")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.AUTO, new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        assertThat(gateway.calls()).hasSize(1);
+        assertThat(runtime.metrics().planCalls()).isZero();
+        assertThat(runtime.metrics().planRevisions()).isZero();
+        verify(manager, never()).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .containsSubsequence(AgentEvent.Type.AI_THINKING, AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void autoModeCreatesOnePlanThenRunsOrdinaryToolBeforeFinalAnswer() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, CREATE_ARGUMENTS),
+                AgentTestMessages.assistantToolCall("tool-1", "databaseQuery", "{\"sql\":\"SELECT 1\"}"),
+                AgentTestMessages.assistantText("已按计划完成查询")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        when(manager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
+                .thenReturn(toolExecutionResult(
+                        AgentTestMessages.toolResponse("tool-1", "databaseQuery", "查询结果: 1")));
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        InMemoryChatMessageFacadeService messages = new InMemoryChatMessageFacadeService();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.AUTO, new PlanControlTool(), AgentLoopPolicy.defaults(), messages);
+
+        runtime.execute();
+
+        assertThat(gateway.calls()).hasSize(3);
+        assertThat(runtime.metrics().planCalls()).isEqualTo(1);
+        assertThat(runtime.metrics().planRevisions()).isEqualTo(1);
+        verify(manager).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(messages.messages()).extracting(ChatMessageDTO::getRole)
+                .containsExactly(ChatMessageDTO.RoleType.ASSISTANT,
+                        ChatMessageDTO.RoleType.TOOL,
+                        ChatMessageDTO.RoleType.ASSISTANT,
+                        ChatMessageDTO.RoleType.TOOL,
+                        ChatMessageDTO.RoleType.ASSISTANT);
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .containsSubsequence(AgentEvent.Type.PLAN_CREATED, AgentEvent.Type.AI_EXECUTING,
+                        AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void requiredModeCreatesPlanThenAllowsOrdinaryToolAndFinalAnswer() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, CREATE_ARGUMENTS),
+                AgentTestMessages.assistantToolCall("tool-1", "databaseQuery", "{\"sql\":\"SELECT 1\"}"),
+                AgentTestMessages.assistantText("必需计划已完成")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        when(manager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
+                .thenReturn(toolExecutionResult(
+                        AgentTestMessages.toolResponse("tool-1", "databaseQuery", "查询结果: 1")));
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.REQUIRED, new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        assertThat(runtime.metrics().planCalls()).isEqualTo(1);
+        assertThat(runtime.metrics().planRevisions()).isEqualTo(1);
+        verify(manager).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .containsSubsequence(AgentEvent.Type.PLAN_CREATED, AgentEvent.Type.AI_EXECUTING,
+                        AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void requiredModeStillAllowsFinalAnswerAfterPlanIsCompleted() {
+        String completeArguments = "{\"command\":{\"action\":\"COMPLETE\","
+                + "\"planId\":\"plan-1\",\"version\":2,"
+                + "\"steps\":[{\"id\":\"step-1\",\"title\":\"查找资料\","
+                + "\"dependsOn\":[],\"status\":\"COMPLETED\","
+                + "\"successCriteria\":\"找到可引用资料\"}],"
+                + "\"currentTaskId\":null,\"observation\":\"完成\"}}";
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, CREATE_ARGUMENTS),
+                AgentTestMessages.assistantToolCall("plan-2", PlanControlTool.TOOL_NAME, completeArguments),
+                AgentTestMessages.assistantText("计划已完成，给出最终结论")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.REQUIRED, new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        assertThat(gateway.calls()).hasSize(3);
+        assertThat(runtime.metrics().planCalls()).isEqualTo(2);
+        assertThat(runtime.metrics().planRevisions()).isEqualTo(2);
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .containsSubsequence(AgentEvent.Type.PLAN_CREATED, AgentEvent.Type.PLAN_UPDATED,
+                        AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void disabledModeAllowsOrdinaryToolThenFinalAnswer() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("tool-1", "databaseQuery", "{\"sql\":\"SELECT 1\"}"),
+                AgentTestMessages.assistantText("未启用计划也可完成")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        when(manager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
+                .thenReturn(toolExecutionResult(
+                        AgentTestMessages.toolResponse("tool-1", "databaseQuery", "查询结果: 1")));
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.DISABLED, null, AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        assertThat(runtime.metrics().planCalls()).isZero();
+        assertThat(runtime.metrics().planRevisions()).isZero();
+        verify(manager).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .containsSubsequence(AgentEvent.Type.AI_EXECUTING, AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
     void planRevisionBudgetStopsBeforeApplyingExcessRevision() {
         String updateArguments = "{\"command\":{\"action\":\"UPDATE\","
                 + "\"planId\":\"plan-does-not-match\",\"version\":2,"
@@ -143,6 +328,16 @@ class AgentRuntimePlanEnforcementTest {
                 .contains(AgentEvent.Type.PLAN_CREATED)
                 .doesNotContain(AgentEvent.Type.PLAN_UPDATED)
                 .doesNotContain(AgentEvent.Type.AI_DONE);
+    }
+
+    private ToolCallingManager mockToolManager(String callId, String name, String result) {
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        ToolExecutionResult executionResult = mock(ToolExecutionResult.class);
+        when(executionResult.conversationHistory()).thenReturn(List.of(
+                AgentTestMessages.toolResponse(callId, name, result)));
+        when(manager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
+                .thenReturn(executionResult);
+        return manager;
     }
 
     private AgentRuntime createAgent(
