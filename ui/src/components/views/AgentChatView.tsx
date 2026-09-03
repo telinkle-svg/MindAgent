@@ -304,6 +304,10 @@ const AgentChatView: React.FC = () => {
           if (currentSessionIdRef.current === chatSessionId) {
             activeUserMessageIdRef.current = response.chatMessageId;
           }
+          // Start recovery as soon as the POST is acknowledged. The first
+          // refresh is best-effort and must not be able to block the bounded
+          // reconciliation loop when the API request hangs.
+          startRunReconciliation(chatSessionId);
           return refreshMessages()
             .then((messages) => reconcilePersistedRun(messages))
             .catch((error) => {
@@ -311,8 +315,7 @@ const AgentChatView: React.FC = () => {
                 "Unable to refresh persisted messages after initial submission",
                 error,
               );
-            })
-            .finally(() => startRunReconciliation(chatSessionId));
+            });
         })
         .catch((error) => {
           if (currentSessionIdRef.current !== chatSessionId) {
@@ -392,6 +395,9 @@ const AgentChatView: React.FC = () => {
         if (currentSessionIdRef.current === chatSessionId) {
           activeUserMessageIdRef.current = response.chatMessageId;
         }
+        // Start recovery before the best-effort refresh so a hung GET cannot
+        // keep the UI in the running state until the watchdog expires.
+        startRunReconciliation(chatSessionId);
         // The GET response is merged, rather than replacing the live stream,
         // so an SSE event cannot be lost to an in-flight refresh. A transient
         // refresh failure is retried by the bounded reconciliation loop.
@@ -404,7 +410,6 @@ const AgentChatView: React.FC = () => {
             error,
           );
         }
-        startRunReconciliation(chatSessionId);
       } catch (error) {
         if (currentSessionIdRef.current !== chatSessionId) {
           return;

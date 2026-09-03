@@ -30,6 +30,7 @@ public class AgentEventStreamImpl implements AgentEventStream {
 
     private final ConcurrentMap<String, SseEmitter> clients = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, SessionReplayBuffer> replayBuffers = new ConcurrentHashMap<>();
+    private final Object replayBufferRegistryLock = new Object();
     private final ObjectMapper objectMapper;
     private final LongFunction<SseEmitter> emitterFactory;
     private final LongSupplier clock;
@@ -76,13 +77,29 @@ public class AgentEventStreamImpl implements AgentEventStream {
     }
 
     private SessionReplayBuffer replayBuffer(String chatSessionId) {
-        cleanupExpiredReplayBuffers();
-        return replayBuffers.computeIfAbsent(chatSessionId, ignored -> new SessionReplayBuffer());
+        long now = clock.getAsLong();
+        synchronized (replayBufferRegistryLock) {
+            cleanupExpiredReplayBuffers(now);
+            SessionReplayBuffer buffer = replayBuffers.computeIfAbsent(
+                    chatSessionId,
+                    ignored -> new SessionReplayBuffer()
+            );
+            // Mark the buffer as recently used before returning it. This closes
+            // the small race where scheduled cleanup could remove an idle
+            // buffer between lookup and open/publish registration.
+            buffer.touch(now);
+            return buffer;
+        }
     }
 
     @Scheduled(fixedDelay = 5 * 60 * 1000L)
     private void cleanupExpiredReplayBuffers() {
-        long now = clock.getAsLong();
+        synchronized (replayBufferRegistryLock) {
+            cleanupExpiredReplayBuffers(clock.getAsLong());
+        }
+    }
+
+    private void cleanupExpiredReplayBuffers(long now) {
         replayBuffers.forEach((chatSessionId, buffer) -> {
             synchronized (buffer) {
                 buffer.pruneExpired(now);
