@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,6 +54,73 @@ class AgentEventStreamImplTest {
                 .type(AgentEvent.Type.AI_THINKING)
                 .build()))
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void reconnectReplaysEventsAfterLastEventId() throws Exception {
+        SseEmitter first = service.open("session-replay");
+        initializeEmitter(first);
+
+        service.publish("session-replay", AgentEvent.builder()
+                .type(AgentEvent.Type.AI_THINKING)
+                .payload(AgentEvent.Payload.builder().statusText("思考中").build())
+                .build());
+        service.publish("session-replay", AgentEvent.builder()
+                .type(AgentEvent.Type.AI_DONE)
+                .payload(AgentEvent.Payload.builder().done(true).build())
+                .build());
+
+        SseEmitter second = service.open("session-replay", "1");
+        CapturingHandler secondHandler = initializeEmitter(second);
+
+        String replayedData = flattenEventData(secondHandler.sentBatches);
+        assertThat(replayedData).contains("connected", "AI_DONE");
+    }
+
+    @Test
+    void bufferedEventCanBeReplayedWhenConnectionWasTemporarilyAbsent() throws Exception {
+        service.publish("session-offline", AgentEvent.builder()
+                .type(AgentEvent.Type.AI_DONE)
+                .payload(AgentEvent.Payload.builder().done(true).build())
+                .build());
+
+        SseEmitter emitter = service.open("session-offline", "0");
+        CapturingHandler handler = initializeEmitter(emitter);
+
+        assertThat(flattenEventData(handler.sentBatches)).contains("connected", "AI_DONE");
+    }
+
+    @Test
+    void replayBufferIsBoundedAndExpiresEventsByCreationTime() throws Exception {
+        AtomicLong now = new AtomicLong(1_000L);
+        AgentEventStreamImpl clockedService = new AgentEventStreamImpl(
+                new ObjectMapper(),
+                SseEmitter::new,
+                now::get
+        );
+
+        for (int index = 1; index <= 257; index++) {
+            clockedService.publish("session-bounded", AgentEvent.builder()
+                    .type(AgentEvent.Type.AI_THINKING)
+                    .payload(AgentEvent.Payload.builder()
+                            .statusText("event-" + index)
+                            .build())
+                    .build());
+        }
+
+        SseEmitter emitter = clockedService.open("session-bounded", "0");
+        CapturingHandler handler = initializeEmitter(emitter);
+        String boundedData = flattenEventData(handler.sentBatches);
+        assertThat(boundedData)
+                .contains("\"statusText\":\"event-2\"", "\"statusText\":\"event-257\"")
+                .doesNotContain("\"statusText\":\"event-1\"");
+
+        now.addAndGet(30 * 60 * 1000L + 1);
+        SseEmitter expiredEmitter = clockedService.open("session-bounded", "0");
+        CapturingHandler expiredHandler = initializeEmitter(expiredEmitter);
+        assertThat(flattenEventData(expiredHandler.sentBatches))
+                .contains("connected")
+                .doesNotContain("AI_THINKING");
     }
 
     @Test
@@ -204,6 +272,12 @@ class AgentEventStreamImplTest {
                     .reduce("", (left, right) -> left + right);
         }
         return dataValue(batch);
+    }
+
+    private static String flattenEventData(List<?> batches) {
+        return batches.stream()
+                .map(AgentEventStreamImplTest::flattenEventData)
+                .reduce("", (left, right) -> left + right);
     }
 
     private static String dataValue(Object value) {

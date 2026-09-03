@@ -1,5 +1,5 @@
 import { get, post, patch, del, BASE_URL } from "./http.ts";
-import type { ApiResponse } from "./http.ts";
+import type { ApiResponse, RequestOptions } from "./http.ts";
 import type { ChatMessageVO, MessageType, PlanningMode } from "../types";
 
 // 类型定义
@@ -136,8 +136,13 @@ export async function getChatSessions(): Promise<GetChatSessionsResponse> {
  */
 export async function getChatSession(
   chatSessionId: string,
+  options?: Omit<RequestOptions, "method" | "body" | "params">,
 ): Promise<GetChatSessionResponse> {
-  return get<GetChatSessionResponse>(`/chat-sessions/${chatSessionId}`);
+  return get<GetChatSessionResponse>(
+    `/chat-sessions/${chatSessionId}`,
+    undefined,
+    options,
+  );
 }
 
 /**
@@ -200,8 +205,13 @@ export interface UpdateChatMessageRequest {
  */
 export async function getChatMessagesBySessionId(
   sessionId: string,
+  options?: Omit<RequestOptions, "method" | "body" | "params">,
 ): Promise<GetChatMessagesResponse> {
-  return get<GetChatMessagesResponse>(`/chat-messages/session/${sessionId}`);
+  return get<GetChatMessagesResponse>(
+    `/chat-messages/session/${sessionId}`,
+    undefined,
+    options,
+  );
 }
 
 /**
