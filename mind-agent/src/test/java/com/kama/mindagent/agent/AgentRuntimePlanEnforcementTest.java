@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
 
 class AgentRuntimePlanEnforcementTest {
 
-    private static final String CREATE_ARGUMENTS = "{\"command\":{\"action\":\"CREATE\"," 
+    private static final String CREATE_ARGUMENTS = "{\"command\":{\"action\":\"CREATE\","
             + "\"version\":1,\"steps\":[{\"id\":\"step-1\",\"title\":\"查找资料\","
             + "\"dependsOn\":[],\"status\":\"IN_PROGRESS\","
             + "\"successCriteria\":\"找到可引用资料\"}],"
@@ -294,16 +294,6 @@ class AgentRuntimePlanEnforcementTest {
                 .contains(AgentEvent.Type.PLAN_CREATED)
                 .doesNotContain(AgentEvent.Type.PLAN_UPDATED)
                 .doesNotContain(AgentEvent.Type.AI_DONE);
-    }
-
-    private ToolCallingManager mockToolManager(String callId, String name, String result) {
-        ToolCallingManager manager = mock(ToolCallingManager.class);
-        ToolExecutionResult executionResult = mock(ToolExecutionResult.class);
-        when(executionResult.conversationHistory()).thenReturn(List.of(
-                AgentTestMessages.toolResponse(callId, name, result)));
-        when(manager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
-                .thenReturn(executionResult);
-        return manager;
     }
 
     private ToolExecutionResult toolExecutionResult(
