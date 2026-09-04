@@ -8,6 +8,12 @@
 evaluation/
 ├── score_agent_evaluation.py
 ├── test_score_agent_evaluation.py
+├── ecom_retrieval_adapter.py
+├── test_ecom_retrieval_adapter.py
+├── public/
+│   └── ecom-retrieval/
+│       ├── README.md
+│       └── manifest.json
 ├── rag/
 │   ├── README.md
 │   ├── corpus.jsonl
@@ -50,6 +56,10 @@ python evaluation/score_agent_evaluation.py --mode rag `
 python evaluation/score_agent_evaluation.py --mode tool-selection `
   --gold evaluation/tool-selection/cases.jsonl --results C:\temp\tool-results.jsonl --pretty
 ```
+
+## 公共 RAG 基线
+
+`public/ecom-retrieval/` 记录公开的 `mteb/EcomRetrieval` 数据集来源和运行契约。原始数据及结果保存在仓库外，由 `ecom_retrieval_adapter.py` 转换为与本评分器兼容的 gold/corpus JSONL；该目录不提交下载缓存。具体的快速（100 查询）和完整（1,000 查询）命令、revision 固定方式及候选集限制说明见其 [README](public/ecom-retrieval/README.md)。
 
 缺少结果的 gold 用例会计为未命中/不正确，并在 `missingCaseIds` 中列出；格式错误或重复 ID 会以非零退出码终止。评分器不会把未执行用例误报为通过。
 

@@ -1,0 +1,34 @@
+{
+  "dataset": "mteb/EcomRetrieval",
+  "files": {
+    "adapter": "evaluation/ecom_retrieval_adapter.py",
+    "gold": "queries.jsonl",
+    "corpus": "corpus.jsonl",
+    "manifest": "manifest.json"
+  },
+  "language": "cmn",
+  "official": {
+    "corpus": 100902,
+    "downloadSize": "8.49 MB",
+    "positiveDocsPerQuery": 1,
+    "queries": 1000,
+    "split": "dev"
+  },
+  "profiles": {
+    "full": {
+      "corpusLimit": null,
+      "k": 10,
+      "queryLimit": null
+    },
+    "quick": {
+      "corpusLimit": null,
+      "k": 10,
+      "queryLimit": 100
+    }
+  },
+  "rawDataStored": false,
+  "revision": "main",
+  "schemaVersion": 1,
+  "source": "https://huggingface.co/datasets/mteb/EcomRetrieval",
+  "upstream": "https://github.com/Alibaba-NLP/Multi-CPR"
+}
