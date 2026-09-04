@@ -144,6 +144,33 @@ class EcomRetrievalAdapterTest(unittest.TestCase):
         )
         self.assertEqual([record["id"] for record in records[0]], ["corpus"])
 
+    def test_huggingface_loader_falls_back_to_parquet_layout(self):
+        calls = []
+
+        def fake_load_dataset(dataset, *args, **kwargs):
+            calls.append((dataset, args, kwargs))
+            if dataset != "parquet":
+                raise ValueError("BuilderConfig 'corpus' not found")
+            url = kwargs["data_files"]["dev"]
+            config = url.split("/")[-3]
+            return [{"id": config, "text": "dev"}]
+
+        fake_datasets = types.SimpleNamespace(load_dataset=fake_load_dataset)
+        with patch.dict(sys.modules, {"datasets": fake_datasets}):
+            records = load_huggingface_records("mteb/EcomRetrieval", "refs/convert/parquet")
+
+        self.assertEqual(len(calls), 4)
+        self.assertEqual([call[0] for call in calls], ["mteb/EcomRetrieval", "parquet", "parquet", "parquet"])
+        parquet_calls = calls[1:]
+        for call in parquet_calls:
+            url = call[2]["data_files"]["dev"]
+            self.assertIn("refs%2Fconvert%2Fparquet", url)
+            self.assertTrue(url.endswith("/dev/0000.parquet"))
+        self.assertEqual(
+            [record_group[0]["id"] for record_group in records],
+            ["corpus", "queries", "default"],
+        )
+
     @staticmethod
     def read_json_records(path: Path):
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

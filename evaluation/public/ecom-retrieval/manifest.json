@@ -27,7 +27,7 @@
     }
   },
   "rawDataStored": false,
-  "revision": "main",
+  "revision": "1855a4f1bee3a64e11e439f15f129b4cb30cdb9d",
   "schemaVersion": 1,
   "source": "https://huggingface.co/datasets/mteb/EcomRetrieval",
   "upstream": "https://github.com/Alibaba-NLP/Multi-CPR"

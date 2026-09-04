@@ -17,10 +17,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.parse import quote
 
 
 DATASET_NAME = "mteb/EcomRetrieval"
-DATASET_REVISION = "main"
+DATASET_REVISION = "1855a4f1bee3a64e11e439f15f129b4cb30cdb9d"
 DATASET_SPLIT = "dev"
 DEFAULT_QUERY_LIMIT = 100
 DEFAULT_K = 10
@@ -322,9 +323,35 @@ def load_huggingface_records(
             "install it outside the repository or pass --corpus/--queries/--qrels exports"
         ) from exception
 
-    corpus = load_dataset(dataset_name, "corpus", split=DATASET_SPLIT, revision=revision)
-    queries = load_dataset(dataset_name, "queries", split=DATASET_SPLIT, revision=revision)
-    qrels = load_dataset(dataset_name, "default", split=DATASET_SPLIT, revision=revision)
+    try:
+        corpus = load_dataset(dataset_name, "corpus", split=DATASET_SPLIT, revision=revision)
+        queries = load_dataset(dataset_name, "queries", split=DATASET_SPLIT, revision=revision)
+        qrels = load_dataset(dataset_name, "default", split=DATASET_SPLIT, revision=revision)
+    except Exception as named_config_error:
+        # The converted dataset currently exposes one default builder config;
+        # load its three Parquet directories explicitly when named configs are
+        # unavailable in the installed datasets version.
+        encoded_revision = quote(revision, safe="")
+
+        def load_parquet_config(config: str) -> Any:
+            url = (
+                f"https://huggingface.co/datasets/{dataset_name}/resolve/"
+                f"{encoded_revision}/{config}/{DATASET_SPLIT}/0000.parquet"
+            )
+            return load_dataset(
+                "parquet",
+                data_files={DATASET_SPLIT: url},
+                split=DATASET_SPLIT,
+            )
+
+        try:
+            corpus = load_parquet_config("corpus")
+            queries = load_parquet_config("queries")
+            qrels = load_parquet_config("default")
+        except Exception as parquet_error:
+            raise DatasetFormatError(
+                f"failed to load {dataset_name} revision {revision}: {parquet_error}"
+            ) from named_config_error
     return list(corpus), list(queries), list(qrels)
 
 

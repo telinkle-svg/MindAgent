@@ -9,9 +9,9 @@
 - 论文：[Multi-CPR: A Multi-domain Benchmark for Chinese Product Retrieval](https://arxiv.org/abs/2203.03367)
 - 语言：中文（`cmn`）
 - MTEB `dev`：1,000 条查询、100,902 条语料、每条查询一个正例，页面标注总下载量约 8.49 MB
-- Hugging Face 配置：`corpus`/`dev`、`queries`/`dev`、`default`/`dev`（配置名/切分名）
+- Hugging Face 配置目录：`corpus/dev`、`queries/dev`、`default/dev`（适配器通过 Parquet 文件加载）
 
-数据集页面的 `main` 是默认来源版本。为了让不同时间的结果可比较，正式基线运行应把页面解析出的 commit SHA 传给适配器的 `--revision`，并保留命令输出的 `manifest.json`。
+适配器默认固定到已验证的 Parquet 转换 commit `1855a4f1bee3a64e11e439f15f129b4cb30cdb9d`。如果需要更新数据，必须显式传入新的 commit SHA，并保留命令输出的 `manifest.json`；不要用会漂移的 `main` 作为正式基线版本。
 
 ## 生成评测输入
 
