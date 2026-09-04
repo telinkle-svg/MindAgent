@@ -5,12 +5,15 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * Generates an incremental session summary through the configured model.
@@ -48,7 +51,22 @@ public final class ConversationSummarizer {
             ConversationSummary previous,
             String lastSummarizedMessageId
     ) {
+        return summarize(messages, previous, lastSummarizedMessageId, response -> {
+        });
+    }
+
+    /**
+     * Generates a summary and reports provider usage metadata to the caller.
+     * Summary text remains the only value returned by this class.
+     */
+    public ConversationSummary summarize(
+            List<Message> messages,
+            ConversationSummary previous,
+            String lastSummarizedMessageId,
+            Consumer<Usage> usageObserver
+    ) {
         Objects.requireNonNull(messages, "messages cannot be null");
+        Objects.requireNonNull(usageObserver, "usageObserver cannot be null");
         if (messages.isEmpty() && previous == null) {
             throw new IllegalArgumentException("messages must not be empty for an initial summary");
         }
@@ -66,7 +84,7 @@ public final class ConversationSummarizer {
 
         AssistantMessage output;
         try {
-            var response = gateway.request(
+            ChatResponse response = gateway.request(
                     new Prompt(List.of(new UserMessage(request.toString()))),
                     SUMMARY_SYSTEM_PROMPT,
                     List.<ToolCallback>of()
@@ -74,6 +92,9 @@ public final class ConversationSummarizer {
             if (response == null || response.getResult() == null) {
                 throw new IllegalStateException("summary model returned no response");
             }
+            usageObserver.accept(response.getMetadata() == null
+                    ? null
+                    : response.getMetadata().getUsage());
             output = response.getResult().getOutput();
         } catch (RuntimeException exception) {
             throw new IllegalStateException("summary model call failed", exception);

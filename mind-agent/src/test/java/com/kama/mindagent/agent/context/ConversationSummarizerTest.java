@@ -6,10 +6,13 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,6 +22,25 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class ConversationSummarizerTest {
+
+    @Test
+    void reportsProviderUsageToTheCaller() {
+        Usage usage = new DefaultUsage(9, 4, 13);
+        ModelResponseGateway gateway = mock(ModelResponseGateway.class);
+        when(gateway.request(any(Prompt.class), any(String.class), any()))
+                .thenReturn(AgentTestMessages.assistantTextWithUsage("摘要", usage));
+        ConversationSummarizer summarizer = new ConversationSummarizer(gateway);
+        AtomicReference<Usage> observed = new AtomicReference<>();
+
+        summarizer.summarize(
+                List.of(new UserMessage("历史消息")),
+                null,
+                "message-1",
+                observed::set
+        );
+
+        assertThat(observed).hasValue(usage);
+    }
 
     @Test
     void createsIncrementalSummaryWithoutExposingToolCallbacks() {

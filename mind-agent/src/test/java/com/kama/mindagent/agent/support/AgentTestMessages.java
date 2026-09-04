@@ -4,6 +4,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.Usage;
 
 import java.util.List;
 
@@ -17,6 +19,16 @@ public final class AgentTestMessages {
                 .content(content)
                 .toolCalls(List.of())
                 .build());
+    }
+
+    public static ChatResponse assistantTextWithUsage(String content, Usage usage) {
+        return response(
+                AssistantMessage.builder()
+                        .content(content)
+                        .toolCalls(List.of())
+                        .build(),
+                usage
+        );
     }
 
     public static ChatResponse assistantToolCall(String id, String name, String arguments) {
@@ -55,5 +67,12 @@ public final class AgentTestMessages {
 
     private static ChatResponse response(AssistantMessage message) {
         return new ChatResponse(List.of(new Generation(message)));
+    }
+
+    private static ChatResponse response(AssistantMessage message, Usage usage) {
+        return new ChatResponse(
+                List.of(new Generation(message)),
+                ChatResponseMetadata.builder().usage(usage).build()
+        );
     }
 }

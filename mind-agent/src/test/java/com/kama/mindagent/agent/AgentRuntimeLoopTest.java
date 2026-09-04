@@ -13,6 +13,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 
@@ -28,6 +29,29 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentRuntimeLoopTest {
+
+    @Test
+    void run_recordsProviderReportedTokenUsage() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantTextWithUsage(
+                        "普通回答",
+                        new DefaultUsage(12, 5, 17)
+                )
+        ));
+        AgentRuntime runtime = createAgent(
+                gateway,
+                mock(ToolCallingManager.class),
+                new InMemoryChatMessageFacadeService(),
+                new RecordingAgentEventStream()
+        );
+
+        runtime.execute();
+
+        assertThat(runtime.metrics().usageReports()).isEqualTo(1);
+        assertThat(runtime.metrics().promptTokens()).isEqualTo(12);
+        assertThat(runtime.metrics().completionTokens()).isEqualTo(5);
+        assertThat(runtime.metrics().totalTokens()).isEqualTo(17);
+    }
 
     @Test
     void run_withoutToolCall_finishesAfterOneModelCall() {

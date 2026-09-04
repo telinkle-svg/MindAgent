@@ -1,5 +1,7 @@
 package com.kama.mindagent.agent;
 
+import org.springframework.ai.chat.metadata.Usage;
+
 import java.time.Duration;
 import java.time.Instant;
 
@@ -23,6 +25,10 @@ public final class AgentRunMetrics {
     private int truncatedToolResults;
     private int summaryAttempts;
     private int summaryFailures;
+    private int usageReports;
+    private long promptTokens;
+    private long completionTokens;
+    private long totalTokens;
 
     public AgentRunMetrics() {
         this(Instant.now());
@@ -38,6 +44,30 @@ public final class AgentRunMetrics {
 
     public synchronized void recordModelCall() {
         modelCalls++;
+    }
+
+    /**
+     * Records provider-reported token usage for one model response.
+     *
+     * <p>Providers are allowed to omit usage or report only prompt and
+     * completion counts. Missing and negative values are treated as zero;
+     * when total tokens are unavailable, the two component counts are used
+     * as the fallback total.</p>
+     */
+    public synchronized void recordModelUsage(Usage usage) {
+        if (usage == null) {
+            return;
+        }
+        usageReports++;
+        long prompt = nonNegative(usage.getPromptTokens());
+        long completion = nonNegative(usage.getCompletionTokens());
+        long total = nonNegative(usage.getTotalTokens());
+        if (total == 0 && (prompt > 0 || completion > 0)) {
+            total = prompt + completion;
+        }
+        promptTokens += prompt;
+        completionTokens += completion;
+        totalTokens += total;
     }
 
     public synchronized void recordPlanCall() {
@@ -97,6 +127,22 @@ public final class AgentRunMetrics {
 
     public synchronized int modelCalls() {
         return modelCalls;
+    }
+
+    public synchronized int usageReports() {
+        return usageReports;
+    }
+
+    public synchronized long promptTokens() {
+        return promptTokens;
+    }
+
+    public synchronized long completionTokens() {
+        return completionTokens;
+    }
+
+    public synchronized long totalTokens() {
+        return totalTokens;
     }
 
     public synchronized int planCalls() {
@@ -163,8 +209,16 @@ public final class AgentRunMetrics {
                 summaryAttempts,
                 summaryFailures,
                 elapsed(),
-                terminalReason
+                terminalReason,
+                usageReports,
+                promptTokens,
+                completionTokens,
+                totalTokens
         );
+    }
+
+    private long nonNegative(Integer value) {
+        return value == null || value < 0 ? 0 : value;
     }
 
     public record Snapshot(
@@ -182,7 +236,11 @@ public final class AgentRunMetrics {
             int summaryAttempts,
             int summaryFailures,
             Duration elapsed,
-            String terminalReason
+            String terminalReason,
+            int usageReports,
+            long promptTokens,
+            long completionTokens,
+            long totalTokens
     ) {
     }
 }

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.model.tool.ToolCallingManager;
 
 import java.util.ArrayList;
@@ -25,8 +26,14 @@ class AgentRuntimeSummaryIntegrationTest {
     @Test
     void summarizesOmittedTurnsOnceAndUsesThePersistedSummaryForTheRun() {
         ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
-                AgentTestMessages.assistantText("earlier turns summary"),
-                AgentTestMessages.assistantText("最终回答")
+                AgentTestMessages.assistantTextWithUsage(
+                        "earlier turns summary",
+                        new DefaultUsage(20, 5, 25)
+                ),
+                AgentTestMessages.assistantTextWithUsage(
+                        "最终回答",
+                        new DefaultUsage(10, 4, 14)
+                )
         ));
         InMemoryChatMessageFacadeService messages = new InMemoryChatMessageFacadeService();
         AtomicReference<ConversationSummary> persistedSummary = new AtomicReference<>();
@@ -77,6 +84,10 @@ class AgentRuntimeSummaryIntegrationTest {
                         .contains("【会话摘要】")
                         .contains("earlier turns summary"));
         assertThat(runtime.metrics().modelCalls()).isEqualTo(2);
+        assertThat(runtime.metrics().usageReports()).isEqualTo(2);
+        assertThat(runtime.metrics().promptTokens()).isEqualTo(30);
+        assertThat(runtime.metrics().completionTokens()).isEqualTo(9);
+        assertThat(runtime.metrics().totalTokens()).isEqualTo(39);
         assertThat(runtime.metrics().iterations()).isEqualTo(1);
         assertThat(runtime.metrics().terminalReason()).isEqualTo("completed");
     }

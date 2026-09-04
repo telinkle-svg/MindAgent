@@ -29,6 +29,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.messages.*;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
@@ -96,6 +97,12 @@ public class AgentRuntime {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final Integer DEFAULT_MAX_MESSAGES = 20;
+    private static final String RUN_METRICS_LOG =
+            "agent_run_metrics agentId={} chatSessionId={} terminalReason={} elapsedMs={} "
+                    + "iterations={} modelCalls={} planCalls={} planRevisions={} toolCalls={} "
+                    + "contextAssemblies={} maxContextChars={} truncatedToolResults={} "
+                    + "summaryAttempts={} summaryFailures={} usageReports={} promptTokens={} "
+                    + "completionTokens={} totalTokens={}";
 
     // SpringAI 自带的 ChatOptions, 不是 AgentDTO.ChatOptions
     private ChatOptions chatOptions;
@@ -544,6 +551,7 @@ public class AgentRuntime {
                     thinkPrompt,
                     this.availableTools
             );
+            recordModelUsage(this.lastChatResponse);
             Assert.notNull(lastChatResponse, "Last chat client response cannot be null");
             output = this.lastChatResponse
                     .getResult()
@@ -815,6 +823,47 @@ public class AgentRuntime {
                 runMetrics.markTerminal("completed");
                 publishStatus(AgentEvent.Type.AI_DONE, "任务完成");
             }
+            logRunMetrics();
+        }
+    }
+
+    private void recordModelUsage(ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return;
+        }
+        recordModelUsage(response.getMetadata().getUsage());
+    }
+
+    private void recordModelUsage(Usage usage) {
+        runMetrics.recordModelUsage(usage);
+    }
+
+    private void logRunMetrics() {
+        AgentRunMetrics.Snapshot snapshot = runMetrics.snapshot();
+        Object[] values = {
+                agentId,
+                chatSessionId,
+                snapshot.terminalReason(),
+                snapshot.elapsed().toMillis(),
+                snapshot.iterations(),
+                snapshot.modelCalls(),
+                snapshot.planCalls(),
+                snapshot.planRevisions(),
+                snapshot.toolCalls(),
+                snapshot.contextAssemblies(),
+                snapshot.maxContextChars(),
+                snapshot.truncatedToolResults(),
+                snapshot.summaryAttempts(),
+                snapshot.summaryFailures(),
+                snapshot.usageReports(),
+                snapshot.promptTokens(),
+                snapshot.completionTokens(),
+                snapshot.totalTokens()
+        };
+        if (snapshot.usageReports() > 0) {
+            log.info(RUN_METRICS_LOG, values);
+        } else {
+            log.debug(RUN_METRICS_LOG, values);
         }
     }
 
@@ -849,7 +898,8 @@ public class AgentRuntime {
                     .summarize(
                             this.contextAssembler.omittedMessages(fullMemory),
                             this.sessionSummary,
-                            this.summaryAnchorId
+                            this.summaryAnchorId,
+                            this::recordModelUsage
                     );
             summaryPersister.accept(nextSummary);
             this.sessionSummary = nextSummary;
