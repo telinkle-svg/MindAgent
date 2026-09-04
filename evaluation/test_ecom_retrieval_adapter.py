@@ -1,9 +1,18 @@
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from ecom_retrieval_adapter import DatasetFormatError, prepare_from_records, read_records, select_corpus_records
+from ecom_retrieval_adapter import (
+    DatasetFormatError,
+    load_huggingface_records,
+    prepare_from_records,
+    read_records,
+    select_corpus_records,
+)
 
 
 class EcomRetrievalAdapterTest(unittest.TestCase):
@@ -113,6 +122,27 @@ class EcomRetrievalAdapterTest(unittest.TestCase):
             self.assertEqual(read_records(corpus_path, "corpus")[0]["text"], "first product")
             self.assertEqual(read_records(queries_path, "queries")[0]["text"], "first")
             self.assertEqual(read_records(qrels_path, "qrels")[0]["score"], 1.0)
+
+    def test_huggingface_loader_uses_dev_split_for_each_config(self):
+        calls = []
+
+        def fake_load_dataset(dataset, config, split, revision):
+            calls.append((dataset, config, split, revision))
+            return [{"id": config, "text": split}]
+
+        fake_datasets = types.SimpleNamespace(load_dataset=fake_load_dataset)
+        with patch.dict(sys.modules, {"datasets": fake_datasets}):
+            records = load_huggingface_records("mteb/EcomRetrieval", "1855a4f")
+
+        self.assertEqual(
+            calls,
+            [
+                ("mteb/EcomRetrieval", "corpus", "dev", "1855a4f"),
+                ("mteb/EcomRetrieval", "queries", "dev", "1855a4f"),
+                ("mteb/EcomRetrieval", "default", "dev", "1855a4f"),
+            ],
+        )
+        self.assertEqual([record["id"] for record in records[0]], ["corpus"])
 
     @staticmethod
     def read_json_records(path: Path):

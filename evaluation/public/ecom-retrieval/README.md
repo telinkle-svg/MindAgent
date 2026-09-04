@@ -9,7 +9,7 @@
 - 论文：[Multi-CPR: A Multi-domain Benchmark for Chinese Product Retrieval](https://arxiv.org/abs/2203.03367)
 - 语言：中文（`cmn`）
 - MTEB `dev`：1,000 条查询、100,902 条语料、每条查询一个正例，页面标注总下载量约 8.49 MB
-- Hugging Face 配置：`corpus`/`corpus`、`queries`/`queries`、`default`/`dev`（配置名/切分名）
+- Hugging Face 配置：`corpus`/`dev`、`queries`/`dev`、`default`/`dev`（配置名/切分名）
 
 数据集页面的 `main` 是默认来源版本。为了让不同时间的结果可比较，正式基线运行应把页面解析出的 commit SHA 传给适配器的 `--revision`，并保留命令输出的 `manifest.json`。
 

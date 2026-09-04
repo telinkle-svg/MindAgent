@@ -322,8 +322,8 @@ def load_huggingface_records(
             "install it outside the repository or pass --corpus/--queries/--qrels exports"
         ) from exception
 
-    corpus = load_dataset(dataset_name, "corpus", split="corpus", revision=revision)
-    queries = load_dataset(dataset_name, "queries", split="queries", revision=revision)
+    corpus = load_dataset(dataset_name, "corpus", split=DATASET_SPLIT, revision=revision)
+    queries = load_dataset(dataset_name, "queries", split=DATASET_SPLIT, revision=revision)
     qrels = load_dataset(dataset_name, "default", split=DATASET_SPLIT, revision=revision)
     return list(corpus), list(queries), list(qrels)
 
