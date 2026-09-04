@@ -97,6 +97,8 @@ class ReadOnlySqlToolReadOnlyPostgresIntegrationTest {
 
     @Test
     void slowQueryReturnsSafeFailureWithinBoundedTime() {
+        // Exclude first-connection pool startup from the statement timeout measurement.
+        jdbcTemplate.queryForObject("SELECT 1", Integer.class);
         long startedAt = System.nanoTime();
 
         String result = tool.executeQuery(
