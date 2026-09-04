@@ -38,6 +38,10 @@ Desktop.ini
 *.nar
 **/.mvn/timing.properties
 
+# Python evaluation tooling cache
+**/__pycache__/
+*.py[cod]
+
 # Node.js / Vite build output and dependencies
 **/node_modules/
 **/dist/
