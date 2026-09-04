@@ -46,6 +46,8 @@ Desktop.ini
 **/.cache/
 **/.parcel-cache/
 **/.turbo/
+ui/test-results/
+ui/playwright-report/
 *.tsbuildinfo
 
 # Logs and crash reports

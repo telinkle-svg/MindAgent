@@ -36,3 +36,30 @@ jobs:
       - name: Run backend and frontend regression
         shell: pwsh
         run: ./scripts/run-regression.ps1
+
+  browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser regression
+        working-directory: ui
+        run: npm run test:e2e
