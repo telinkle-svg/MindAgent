@@ -501,6 +501,62 @@ public class AgentRuntime {
         return output.getToolCalls() == null ? List.of() : output.getToolCalls();
     }
 
+    private String buildDecisionPrompt() {
+        return """
+                现在你是一个智能的具体「决策模块」。
+                请根据当前对话上下文和下面的运行状态，决定下一步动作。
+
+                【执行模式】
+                - %s
+                【可访问的知识库】
+                - %s
+                【当前计划状态】
+                %s
+
+                【决策规则】
+                - AUTO：简单问题直接输出最终答案；只有复杂或多步骤任务才调用 manage_plan。
+                - REQUIRED：必须先调用 manage_plan 的 CREATE 建立计划，得到接受结果后才能执行其他工具或输出最终答案。
+                - DISABLED：不要调用 manage_plan。
+                - CREATE 的 command.planId 必须为空，version 必须为 1；每个尚未满足依赖的步骤必须标记为 BLOCKED。
+                - UPDATE 必须使用当前计划返回的 planId，并将 version 增加 1；一次只推进当前可执行步骤。
+                - 如果计划已经完成（所有步骤为 COMPLETED 或 SKIPPED），不要再次调用 manage_plan，直接输出最终答案。
+                - 工具调用与最终文本二选一；需要继续工作时只调用一个工具，任务完成时只输出最终答案。
+                """.formatted(
+                planningMode,
+                this.availableKbs,
+                describeCurrentPlan()
+        );
+    }
+
+    private String describeCurrentPlan() {
+        if (planningMode == PlanningMode.DISABLED || planControlTool == null) {
+            return "规划工具不可用。";
+        }
+        PlanSnapshot snapshot = planControlTool.currentSnapshot();
+        if (snapshot == null || !snapshot.exists()) {
+            return "尚未创建计划。";
+        }
+        StringBuilder description = new StringBuilder()
+                .append("planId=").append(snapshot.planId())
+                .append(", version=").append(snapshot.version())
+                .append(", currentTaskId=").append(snapshot.currentTaskId())
+                .append(", completed=").append(snapshot.completed())
+                .append("\nsteps:");
+        if (snapshot.steps() == null || snapshot.steps().isEmpty()) {
+            description.append(" none");
+        } else {
+            for (PlanStep step : snapshot.steps()) {
+                description.append("\n- ")
+                        .append(step.id())
+                        .append(" [")
+                        .append(step.status())
+                        .append("] ")
+                        .append(step.title());
+            }
+        }
+        return description.toString();
+    }
+
     private void validateModelOutput(AssistantMessage output) {
         if (output == null) {
             throw new AgentExecutionException(AgentFailureCode.MODEL_CALL_FAILED);
@@ -523,14 +579,7 @@ public class AgentRuntime {
     private boolean decideNextAction() {
         publishStatus(AgentEvent.Type.AI_THINKING, "思考中：正在分析问题并决定下一步行动...");
 
-        String thinkPrompt = """
-                现在你是一个智能的的具体「决策模块」
-                请根据当前对话上下文，决定下一步的动作。
-                                \s
-                【额外信息】
-                - 你目前拥有的知识库列表以及描述：%s
-                - 如果有缺失的上下文时，优先从知识库中进行搜索
-                """.formatted(this.availableKbs);
+        String thinkPrompt = buildDecisionPrompt();
 
         // 将 thinkPrompt 通过 .user(thinkPrompt) 的方式构造进入 chatClient 中
         // 既能让每次 messageList 的最后一条是 本条提示词，
@@ -784,9 +833,19 @@ public class AgentRuntime {
     private void advanceOneStep() {
         if (decideNextAction()) {
             executeToolCalls();
-        } else { // 没有工具调用
-            agentState = AgentLifecycleState.FINISHED;
+            return;
         }
+
+        // REQUIRED mode must not silently accept a text-only answer before a
+        // plan exists.  The previous check lived only in executeToolCalls(),
+        // so a model could bypass the gate by returning final text directly.
+        if (planningMode == PlanningMode.REQUIRED
+                && (planControlTool == null || !planControlTool.currentSnapshot().exists())) {
+            throw new AgentExecutionException(AgentFailureCode.PLAN_REQUIRED);
+        }
+
+        // 没有工具调用且计划门禁满足，认为模型已经给出最终答案。
+        agentState = AgentLifecycleState.FINISHED;
     }
 
     // 运行

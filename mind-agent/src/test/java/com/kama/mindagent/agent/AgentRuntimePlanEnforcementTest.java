@@ -54,6 +54,23 @@ class AgentRuntimePlanEnforcementTest {
     }
 
     @Test
+    void requiredModeRejectsFinalTextBeforePlanCreation() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantText("直接回答，但尚未创建计划")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.REQUIRED, new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        assertFailure(runtime, sse, AgentFailureCode.PLAN_REQUIRED);
+
+        verify(manager, never()).executeToolCalls(any(Prompt.class), any(ChatResponse.class));
+        assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
+                .doesNotContain(AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
     void disabledModeRejectsReservedPlanCallBeforeDispatch() {
         ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
                 AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, CREATE_ARGUMENTS)
@@ -114,6 +131,30 @@ class AgentRuntimePlanEnforcementTest {
         assertThat(planEvent.getPayload().getPlan().steps()).hasSize(1);
         assertThat(sse.sentEvents()).extracting(AgentEvent::getType)
                 .last().isEqualTo(AgentEvent.Type.AI_DONE);
+    }
+
+    @Test
+    void decisionPromptDescribesTheCurrentPlanToGuideTheNextModelCall() {
+        ScriptedModelResponseGateway gateway = new ScriptedModelResponseGateway(List.of(
+                AgentTestMessages.assistantToolCall("plan-1", PlanControlTool.TOOL_NAME, CREATE_ARGUMENTS),
+                AgentTestMessages.assistantText("计划已执行完毕")
+        ));
+        ToolCallingManager manager = mock(ToolCallingManager.class);
+        RecordingAgentEventStream sse = new RecordingAgentEventStream();
+        AgentRuntime runtime = createAgent(
+                gateway, manager, sse, PlanningMode.AUTO, new PlanControlTool(), AgentLoopPolicy.defaults());
+
+        runtime.execute();
+
+        assertThat(gateway.calls()).hasSize(2);
+        assertThat(gateway.calls().get(0).systemPrompt())
+                .contains("尚未创建计划")
+                .contains("AUTO");
+        assertThat(gateway.calls().get(1).systemPrompt())
+                .contains("当前计划状态")
+                .contains("planId=plan-")
+                .contains("step-1")
+                .contains("不要再次调用 manage_plan");
     }
 
     @Test
