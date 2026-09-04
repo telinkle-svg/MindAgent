@@ -37,6 +37,9 @@ jobs:
         shell: pwsh
         run: ./scripts/run-regression.ps1
 
+      - name: Run offline evaluation scorer tests
+        run: python -m unittest discover -s evaluation -p 'test_*.py' -v
+
   browser-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
