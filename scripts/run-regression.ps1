@@ -34,6 +34,18 @@ function Invoke-CheckedCommand {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $backendRoot = Join-Path $repoRoot "mind-agent"
 $frontendRoot = Join-Path $repoRoot "ui"
+
+# Keep JUnit's temporary files inside the ignored build directory on Windows.
+# Some Windows runners deny the real-path cleanup performed by @TempDir under
+# the shared user TEMP directory, which makes otherwise successful tests fail
+# during extension teardown.
+if ($IsWindows) {
+    $testTempRoot = Join-Path $backendRoot "target\junit-tmp"
+    New-Item -ItemType Directory -Path $testTempRoot -Force | Out-Null
+    $env:TEMP = $testTempRoot
+    $env:TMP = $testTempRoot
+}
+
 $mavenExecutable = if ($IsWindows) {
     Join-Path $backendRoot "mvnw.cmd"
 } else {
