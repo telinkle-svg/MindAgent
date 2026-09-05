@@ -11,6 +11,7 @@ from ecom_retrieval_adapter import (
     load_huggingface_records,
     prepare_from_records,
     read_records,
+    select_corpus_sample_records,
     select_corpus_records,
 )
 
@@ -72,6 +73,78 @@ class EcomRetrievalAdapterTest(unittest.TestCase):
         selected = select_corpus_records(corpus, {"c-4"}, limit=2)
 
         self.assertEqual([record["chunkId"] for record in selected], ["ecom-c-0", "ecom-c-1", "ecom-c-4"])
+
+    def test_corpus_sample_is_input_order_independent_and_retains_positive_documents(self):
+        corpus = [{"id": f"c-{index}", "text": f"product {index}"} for index in range(10)]
+        initial = select_corpus_sample_records(corpus, set(), sample_size=2, seed="test-seed")
+        initial_ids = {record["sourceCorpusId"] for record in initial}
+        positive_id = next(
+            record["id"]
+            for record in corpus
+            if record["id"] not in initial_ids
+        )
+
+        selected = select_corpus_sample_records(
+            list(reversed(corpus)),
+            {positive_id},
+            sample_size=2,
+            seed="test-seed",
+        )
+        repeated = select_corpus_sample_records(
+            corpus,
+            {positive_id},
+            sample_size=2,
+            seed="test-seed",
+        )
+
+        self.assertEqual(
+            [record["sourceCorpusId"] for record in selected],
+            [record["sourceCorpusId"] for record in repeated],
+        )
+        self.assertIn(positive_id, {record["sourceCorpusId"] for record in selected})
+        self.assertEqual(len(selected), 3)
+
+    def test_corpus_sample_rejects_invalid_size_and_seed(self):
+        corpus = [{"id": "c-1", "text": "product"}]
+
+        with self.assertRaisesRegex(DatasetFormatError, "sample size must be positive"):
+            select_corpus_sample_records(corpus, set(), sample_size=0)
+        with self.assertRaisesRegex(DatasetFormatError, "sample seed must be a non-blank"):
+            select_corpus_sample_records(corpus, set(), sample_size=1, seed=" ")
+
+    def test_prepare_rejects_prefix_limit_and_sample_size_together(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(DatasetFormatError, "mutually exclusive"):
+                prepare_from_records(
+                    [{"id": "c-1", "text": "product"}],
+                    [{"id": "q-1", "text": "query"}],
+                    [{"query-id": "q-1", "corpus-id": "c-1", "score": 1}],
+                    Path(temp),
+                    corpus_limit=1,
+                    corpus_sample_size=1,
+                )
+
+    def test_sample_manifest_records_strategy_seed_and_actual_count(self):
+        corpus = [{"id": f"c-{index}", "text": f"product {index}"} for index in range(4)]
+        queries = [{"id": "q-1", "text": "query"}]
+        qrels = [{"query-id": "q-1", "corpus-id": "c-3", "score": 1}]
+
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = prepare_from_records(
+                corpus,
+                queries,
+                qrels,
+                Path(temp),
+                corpus_sample_size=2,
+                corpus_sample_seed="release-1",
+            )
+
+            self.assertEqual(manifest["corpusSamplingStrategy"], "sha256")
+            self.assertEqual(manifest["corpusSampleSize"], 2)
+            self.assertEqual(manifest["corpusSampleSeed"], "release-1")
+            self.assertEqual(manifest["corpusCount"], 2)
+            selected = self.read_json_records(Path(temp) / "corpus.jsonl")
+            self.assertIn("ecom-c-3", [record["chunkId"] for record in selected])
 
     def test_rejects_duplicate_query_ids(self):
         with tempfile.TemporaryDirectory() as temp:

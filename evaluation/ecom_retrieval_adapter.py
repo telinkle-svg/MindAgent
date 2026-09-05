@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
@@ -25,6 +26,8 @@ DATASET_REVISION = "1855a4f1bee3a64e11e439f15f129b4cb30cdb9d"
 DATASET_SPLIT = "dev"
 DEFAULT_QUERY_LIMIT = 100
 DEFAULT_K = 10
+DEFAULT_CORPUS_SAMPLE_SIZE = 5000
+DEFAULT_CORPUS_SAMPLE_SEED = "mindagent-ecom-v1"
 ID_PREFIX = "ecom-"
 
 
@@ -168,6 +171,44 @@ def select_corpus_records(
     return selected
 
 
+def _sample_key(seed: str, source_corpus_id: str) -> tuple[str, tuple[int, int | str]]:
+    digest = hashlib.sha256(f"{seed}\0{source_corpus_id}".encode("utf-8")).hexdigest()
+    return digest, _stable_key(source_corpus_id)
+
+
+def select_corpus_sample_records(
+    corpus_records: Iterable[Mapping[str, Any]],
+    selected_positive_corpus_ids: set[str],
+    sample_size: int,
+    seed: str = DEFAULT_CORPUS_SAMPLE_SEED,
+) -> list[dict[str, Any]]:
+    """Return a deterministic hash-ranked sample while retaining all positives."""
+
+    if sample_size < 1:
+        raise DatasetFormatError("corpus sample size must be positive")
+    if not isinstance(seed, str) or not seed.strip():
+        raise DatasetFormatError("corpus sample seed must be a non-blank string")
+
+    normalized = _normalize_corpus(corpus_records)
+    positive_ids = {_source_id(value) for value in selected_positive_corpus_ids}
+    if sample_size >= len(normalized):
+        return normalized
+
+    ranked = sorted(
+        normalized,
+        key=lambda record: _sample_key(seed, record["sourceCorpusId"]),
+    )
+    selected = ranked[:sample_size]
+    selected_ids = {record["sourceCorpusId"] for record in selected}
+    selected.extend(
+        record
+        for record in ranked[sample_size:]
+        if record["sourceCorpusId"] in positive_ids
+        and record["sourceCorpusId"] not in selected_ids
+    )
+    return selected
+
+
 def _write_jsonl(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as output:
         for record in records:
@@ -183,6 +224,8 @@ def prepare_from_records(
     query_limit: int | None = DEFAULT_QUERY_LIMIT,
     k: int = DEFAULT_K,
     corpus_limit: int | None = None,
+    corpus_sample_size: int | None = None,
+    corpus_sample_seed: str = DEFAULT_CORPUS_SAMPLE_SEED,
     dataset_name: str = DATASET_NAME,
     split: str = DATASET_SPLIT,
     revision: str = DATASET_REVISION,
@@ -193,6 +236,13 @@ def prepare_from_records(
         raise DatasetFormatError("query limit must be positive when provided")
     if k < 1:
         raise DatasetFormatError("k must be positive")
+    if corpus_limit is not None and corpus_sample_size is not None:
+        raise DatasetFormatError("corpus limit and corpus sample size are mutually exclusive")
+    if corpus_sample_size is not None:
+        if corpus_sample_size < 1:
+            raise DatasetFormatError("corpus sample size must be positive")
+        if not isinstance(corpus_sample_seed, str) or not corpus_sample_seed.strip():
+            raise DatasetFormatError("corpus sample seed must be a non-blank string")
     if not isinstance(dataset_name, str) or not dataset_name.strip():
         raise DatasetFormatError("dataset name must be non-blank")
     if not isinstance(split, str) or not split.strip():
@@ -235,6 +285,13 @@ def prepare_from_records(
     selected_corpus = normalized_corpus
     if corpus_limit is not None:
         selected_corpus = select_corpus_records(normalized_corpus, selected_positive_ids, corpus_limit)
+    elif corpus_sample_size is not None:
+        selected_corpus = select_corpus_sample_records(
+            normalized_corpus,
+            selected_positive_ids,
+            corpus_sample_size,
+            corpus_sample_seed,
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_jsonl(output_dir / "corpus.jsonl", selected_corpus)
@@ -248,6 +305,13 @@ def prepare_from_records(
         "queryLimit": query_limit,
         "queryCount": len(gold_queries),
         "corpusLimit": corpus_limit,
+        "corpusSampleSize": corpus_sample_size,
+        "corpusSampleSeed": corpus_sample_seed if corpus_sample_size is not None else None,
+        "corpusSamplingStrategy": (
+            "sha256" if corpus_sample_size is not None
+            else "prefix" if corpus_limit is not None
+            else "full"
+        ),
         "corpusCount": len(selected_corpus),
         "k": k,
         "rawDataStored": False,
@@ -360,7 +424,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True, help="external output directory")
     parser.add_argument("--query-limit", type=int, default=DEFAULT_QUERY_LIMIT)
     parser.add_argument("--full", action="store_true", help="include all available queries")
-    parser.add_argument("--corpus-limit", type=int, default=0, help="optional deterministic corpus limit")
+    corpus_selection = parser.add_mutually_exclusive_group()
+    corpus_selection.add_argument(
+        "--corpus-limit",
+        type=int,
+        default=0,
+        help="legacy deterministic prefix limit",
+    )
+    corpus_selection.add_argument(
+        "--corpus-sample-size",
+        type=int,
+        help=f"deterministic SHA-256 corpus sample size (default profile: {DEFAULT_CORPUS_SAMPLE_SIZE})",
+    )
+    parser.add_argument("--corpus-sample-seed", default=DEFAULT_CORPUS_SAMPLE_SEED)
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument("--dataset", default=DATASET_NAME)
     parser.add_argument("--revision", default=DATASET_REVISION, help="Hugging Face dataset revision or commit")
@@ -391,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
             query_limit=None if args.full else args.query_limit,
             k=args.k,
             corpus_limit=None if args.corpus_limit == 0 else args.corpus_limit,
+            corpus_sample_size=args.corpus_sample_size,
+            corpus_sample_seed=args.corpus_sample_seed,
             dataset_name=args.dataset,
             revision=args.revision,
         )
