@@ -9,14 +9,22 @@ from unittest.mock import patch
 from ecom_retrieval_adapter import (
     DatasetFormatError,
     load_huggingface_records,
+    parse_args,
     prepare_from_records,
     read_records,
+    resolve_corpus_selection,
     select_corpus_sample_records,
     select_corpus_records,
 )
 
 
 class EcomRetrievalAdapterTest(unittest.TestCase):
+
+    def test_sampled_profile_is_the_cli_default_and_full_is_explicit(self):
+        self.assertEqual(parse_args(["--output", "out"]).profile, "sampled")
+        self.assertEqual(resolve_corpus_selection("sampled"), (None, 5000))
+        self.assertEqual(resolve_corpus_selection("full"), (None, None))
+        self.assertEqual(resolve_corpus_selection("full", corpus_sample_size=123), (None, 123))
 
     def test_quick_profile_selects_stable_queries_and_maps_relevant_chunks(self):
         corpus = [
@@ -73,6 +81,16 @@ class EcomRetrievalAdapterTest(unittest.TestCase):
         selected = select_corpus_records(corpus, {"c-4"}, limit=2)
 
         self.assertEqual([record["chunkId"] for record in selected], ["ecom-c-0", "ecom-c-1", "ecom-c-4"])
+
+    def test_positive_source_id_with_ecom_prefix_is_not_stripped(self):
+        corpus = [
+            {"id": "ecom-actual", "text": "prefixed source"},
+            {"id": "other", "text": "other product"},
+        ]
+
+        selected = select_corpus_records(corpus, {"ecom-actual"}, limit=1)
+
+        self.assertIn("ecom-ecom-actual", [record["chunkId"] for record in selected])
 
     def test_corpus_sample_is_input_order_independent_and_retains_positive_documents(self):
         corpus = [{"id": f"c-{index}", "text": f"product {index}"} for index in range(10)]

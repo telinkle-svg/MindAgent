@@ -32,6 +32,15 @@ class BaselineFormatError(ValueError):
     """Raised when input data, embeddings, or runner settings are invalid."""
 
 
+def _normalize_base_url(base_url: str) -> str:
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise BaselineFormatError("Ollama base URL must be a non-blank string")
+    normalized = base_url.strip().rstrip("/")
+    if not normalized:
+        raise BaselineFormatError("Ollama base URL must be a non-blank string")
+    return normalized
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         raise BaselineFormatError(f"JSONL file does not exist: {path}")
@@ -150,8 +159,10 @@ class OllamaEmbeddingClient:
             raise BaselineFormatError("endpoint mode must be legacy or embed")
         if timeout <= 0:
             raise BaselineFormatError("timeout must be positive")
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+        if not isinstance(model, str) or not model.strip():
+            raise BaselineFormatError("model must be a non-blank string")
+        self.base_url = _normalize_base_url(base_url)
+        self.model = model.strip()
         self.endpoint_mode = endpoint_mode
         self.timeout = timeout
         self.transport = transport or _post_json
@@ -195,11 +206,27 @@ class OllamaEmbeddingClient:
 
 
 class EmbeddingCache:
-    def __init__(self, path: Path | None, model: str, endpoint_mode: str) -> None:
+    def __init__(
+        self,
+        path: Path | None,
+        model: str,
+        endpoint_mode: str,
+        base_url: str = DEFAULT_BASE_URL,
+        model_digest: str | None = None,
+    ) -> None:
         self.path = path
         self.model = model
         self.endpoint_mode = endpoint_mode
+        self.base_url = _normalize_base_url(base_url)
+        if model_digest is not None and (
+            not isinstance(model_digest, str) or not model_digest.strip()
+        ):
+            raise BaselineFormatError("model digest must be a non-blank string when provided")
+        self.model_digest = model_digest.strip() if model_digest is not None else None
+        if path is not None and not self.model_digest:
+            raise BaselineFormatError("model digest is required when embedding cache is enabled")
         self.records: dict[str, list[float]] = {}
+        self._preserved_records: dict[str, dict[str, Any]] = {}
         self.hits = 0
         self.misses = 0
         if path is not None and path.exists():
@@ -219,13 +246,19 @@ class EmbeddingCache:
             key = record.get("key")
             if not isinstance(key, str) or not key:
                 raise BaselineFormatError(f"embedding cache record at {self.path}:{line_number} has no key")
-            if record.get("model") != self.model or record.get("endpointMode") != self.endpoint_mode:
+            if (
+                record.get("model") != self.model
+                or record.get("endpointMode") != self.endpoint_mode
+                or record.get("baseUrl") != self.base_url
+                or record.get("modelDigest") != self.model_digest
+            ):
+                self._preserved_records[key] = record
                 continue
             self.records[key] = _validate_embedding(record.get("embedding"))
 
     def key_for(self, text: str) -> str:
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        return f"{self.model}|{self.endpoint_mode}|{digest}"
+        return f"{self.base_url}|{self.model}|{self.model_digest}|{self.endpoint_mode}|{digest}"
 
     def get(self, key: str) -> list[float] | None:
         value = self.records.get(key)
@@ -242,13 +275,19 @@ class EmbeddingCache:
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        lines = []
+        lines = [
+            json.dumps(record, ensure_ascii=False, sort_keys=True)
+            for key, record in sorted(self._preserved_records.items())
+            if key not in self.records
+        ]
         for key in sorted(self.records):
             lines.append(
                 json.dumps(
                     {
                         "key": key,
+                        "baseUrl": self.base_url,
                         "model": self.model,
+                        "modelDigest": self.model_digest,
                         "endpointMode": self.endpoint_mode,
                         "embedding": self.records[key],
                     },
@@ -390,6 +429,7 @@ def run_baseline(
     *,
     base_url: str = DEFAULT_BASE_URL,
     model: str = DEFAULT_MODEL,
+    model_digest: str | None = None,
     endpoint_mode: str = DEFAULT_ENDPOINT_MODE,
     metric: str = DEFAULT_METRIC,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -400,8 +440,8 @@ def run_baseline(
 ) -> dict[str, Any]:
     if metric not in {"l2", "cosine"}:
         raise BaselineFormatError("metric must be l2 or cosine")
-    if top_k < 1:
-        raise BaselineFormatError("top-k must be positive")
+    if top_k < 10:
+        raise BaselineFormatError("top-k must be at least 10 because metrics include Hit@10 and MRR@10")
     if batch_size < 1:
         raise BaselineFormatError("batch size must be positive")
     if timeout <= 0:
@@ -417,11 +457,19 @@ def run_baseline(
         timeout=timeout,
         transport=transport,
     )
-    cache = EmbeddingCache(embedding_cache, model, endpoint_mode)
+    model = client.model
+    cache = EmbeddingCache(
+        embedding_cache,
+        model,
+        endpoint_mode,
+        base_url=client.base_url,
+        model_digest=model_digest,
+    )
+    model_digest = cache.model_digest
 
     corpus_started = time.perf_counter()
     corpus_vectors, dimension = embed_texts(
-        [record["content"] for record in corpus],
+        [_require_text(record, "content", index + 1) for index, record in enumerate(corpus)],
         client,
         cache,
         batch_size,
@@ -437,21 +485,26 @@ def run_baseline(
     query_latencies_ms: list[float] = []
     query_embedding_seconds = 0.0
     query_vectors: list[list[float]]
-    query_latency_scope = "embedding+ranking" if endpoint_mode == "legacy" else "ranking-only"
+    query_cache_hits = 0
+    query_cache_misses = 0
 
     if endpoint_mode == "legacy":
         query_vectors = []
-        for query in queries:
+        for index, query in enumerate(queries):
             query_started = time.perf_counter()
+            query_hits_before = cache.hits
+            query_misses_before = cache.misses
             query_embedding_started = time.perf_counter()
             vectors, dimension = embed_texts(
-                [query["query"]],
+                [_require_text(query, "query", index + 1)],
                 client,
                 cache,
                 batch_size,
                 expected_dimension=dimension,
             )
             query_embedding_seconds += time.perf_counter() - query_embedding_started
+            query_cache_hits += cache.hits - query_hits_before
+            query_cache_misses += cache.misses - query_misses_before
             ranked = rank_candidates(vectors[0], corpus, vector_by_id, top_k, metric=metric)
             query_latencies_ms.append((time.perf_counter() - query_started) * 1000.0)
             result_records.append(
@@ -461,15 +514,19 @@ def run_baseline(
                 }
             )
     else:
+        query_hits_before = cache.hits
+        query_misses_before = cache.misses
         query_embedding_started = time.perf_counter()
         query_vectors, dimension = embed_texts(
-            [query["query"] for query in queries],
+            [_require_text(query, "query", index + 1) for index, query in enumerate(queries)],
             client,
             cache,
             batch_size,
             expected_dimension=dimension,
         )
         query_embedding_seconds = time.perf_counter() - query_embedding_started
+        query_cache_hits = cache.hits - query_hits_before
+        query_cache_misses = cache.misses - query_misses_before
         for query, query_vector in zip(queries, query_vectors):
             ranking_started = time.perf_counter()
             ranked = rank_candidates(query_vector, corpus, vector_by_id, top_k, metric=metric)
@@ -482,6 +539,14 @@ def run_baseline(
             )
 
     cache.flush()
+    if endpoint_mode == "embed":
+        query_latency_scope = "ranking-only"
+    elif query_cache_misses == 0:
+        query_latency_scope = "ranking-only"
+    elif query_cache_hits == 0:
+        query_latency_scope = "embedding+ranking"
+    else:
+        query_latency_scope = "mixed"
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_jsonl(output_dir / "results.jsonl", result_records)
     metrics: dict[str, Any] = {
@@ -489,6 +554,8 @@ def run_baseline(
         "dataset": queries[0].get("dataset"),
         "split": queries[0].get("split"),
         "model": model,
+        "modelDigest": model_digest,
+        "ollamaBaseUrl": client.base_url,
         "endpointMode": endpoint_mode,
         "metric": metric,
         "topK": top_k,
@@ -509,6 +576,8 @@ def run_baseline(
             "path": str(embedding_cache) if embedding_cache is not None else None,
             "hits": cache.hits,
             "misses": cache.misses,
+            "queryHits": query_cache_hits,
+            "queryMisses": query_cache_misses,
         },
     }
     metrics.update(_score_results(queries, result_records))
@@ -526,6 +595,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--ollama-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model-digest",
+        help="immutable Ollama model digest; required when --embedding-cache is used",
+    )
     parser.add_argument("--endpoint-mode", choices=("legacy", "embed"), default=DEFAULT_ENDPOINT_MODE)
     parser.add_argument("--metric", choices=("l2", "cosine"), default=DEFAULT_METRIC)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -544,6 +617,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output,
             base_url=args.ollama_url,
             model=args.model,
+            model_digest=args.model_digest,
             endpoint_mode=args.endpoint_mode,
             metric=args.metric,
             batch_size=args.batch_size,

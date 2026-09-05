@@ -5,6 +5,7 @@ from pathlib import Path
 
 from run_ecom_vector_baseline import (
     BaselineFormatError,
+    EmbeddingCache,
     OllamaEmbeddingClient,
     rank_candidates,
     run_baseline,
@@ -118,7 +119,8 @@ class EcomVectorBaselineTest(unittest.TestCase):
                 base_url="http://ollama.test",
                 endpoint_mode="legacy",
                 metric="l2",
-                top_k=2,
+                top_k=10,
+                model_digest="test-digest",
                 embedding_cache=cache_path,
                 transport=transport,
             )
@@ -130,13 +132,20 @@ class EcomVectorBaselineTest(unittest.TestCase):
                 base_url="http://ollama.test",
                 endpoint_mode="legacy",
                 metric="l2",
-                top_k=2,
+                top_k=10,
+                model_digest="test-digest",
                 embedding_cache=cache_path,
                 transport=transport,
             )
 
             self.assertEqual(first["cache"]["misses"], 3)
+            self.assertEqual(first["cache"]["queryHits"], 0)
+            self.assertEqual(first["cache"]["queryMisses"], 1)
+            self.assertEqual(first["queryLatencyScope"], "embedding+ranking")
             self.assertEqual(second["cache"]["hits"], 3)
+            self.assertEqual(second["cache"]["queryHits"], 1)
+            self.assertEqual(second["cache"]["queryMisses"], 0)
+            self.assertEqual(second["queryLatencyScope"], "ranking-only")
             self.assertEqual(second["embeddingDimension"], 2)
             self.assertEqual(len(transport.calls), call_count)
             results = self.read_jsonl(output_path / "results.jsonl")
@@ -146,6 +155,45 @@ class EcomVectorBaselineTest(unittest.TestCase):
             self.assertEqual(metrics["candidateCount"], 2)
             self.assertEqual(metrics["hitAt1"], 1.0)
             self.assertEqual(metrics["mrrAt10"], 1.0)
+
+    def test_run_baseline_requires_top_k_of_at_least_ten(self):
+        with self.assertRaisesRegex(BaselineFormatError, "at least 10"):
+            run_baseline(Path("missing-corpus.jsonl"), Path("missing-queries.jsonl"), Path("output"), top_k=9)
+
+    def test_embedding_cache_requires_model_digest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(BaselineFormatError, "model digest is required"):
+                EmbeddingCache(Path(temp) / "embeddings.jsonl", "bge-m3", "legacy")
+
+    def test_embedding_cache_namespace_includes_base_url_and_digest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "embeddings.jsonl"
+            first = EmbeddingCache(
+                path,
+                "bge-m3",
+                "legacy",
+                base_url="http://ollama-a.test/",
+                model_digest="digest-a",
+            )
+            first.put(first.key_for("text"), [1.0, 0.0])
+            first.flush()
+
+            different_server = EmbeddingCache(
+                path,
+                "bge-m3",
+                "legacy",
+                base_url="http://ollama-b.test",
+                model_digest="digest-a",
+            )
+            self.assertIsNone(different_server.get(different_server.key_for("text")))
+            different_model = EmbeddingCache(
+                path,
+                "bge-m3",
+                "legacy",
+                base_url="http://ollama-a.test",
+                model_digest="digest-b",
+            )
+            self.assertIsNone(different_model.get(different_model.key_for("text")))
 
     def test_run_baseline_rejects_embedding_dimension_mismatch(self):
         vectors = {"first document": [1.0, 0.0], "query": [1.0, 0.0, 0.0]}

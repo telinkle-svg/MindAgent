@@ -17,11 +17,17 @@
   "profiles": {
     "full": {
       "corpusLimit": null,
+      "corpusSampleSeed": null,
+      "corpusSampleSize": null,
+      "corpusSamplingStrategy": "full",
       "k": 10,
       "queryLimit": null
     },
     "quick": {
       "corpusLimit": null,
+      "corpusSampleSeed": "mindagent-ecom-v1",
+      "corpusSampleSize": 5000,
+      "corpusSamplingStrategy": "sha256",
       "k": 10,
       "queryLimit": 100
     }

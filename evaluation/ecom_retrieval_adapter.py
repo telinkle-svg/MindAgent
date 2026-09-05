@@ -35,6 +35,26 @@ class DatasetFormatError(ValueError):
     """Raised when a public dataset export violates the adapter contract."""
 
 
+def resolve_corpus_selection(
+    profile: str,
+    corpus_limit: int | None = None,
+    corpus_sample_size: int | None = None,
+) -> tuple[int | None, int | None]:
+    """Resolve CLI corpus options, defaulting the sampled regression profile."""
+
+    if profile not in {"sampled", "full"}:
+        raise DatasetFormatError("profile must be sampled or full")
+    if corpus_limit not in {None, 0} and corpus_sample_size is not None:
+        raise DatasetFormatError("corpus limit and corpus sample size are mutually exclusive")
+    if corpus_limit not in {None, 0}:
+        return corpus_limit, None
+    if corpus_sample_size is not None:
+        return None, corpus_sample_size
+    if profile == "sampled":
+        return None, DEFAULT_CORPUS_SAMPLE_SIZE
+    return None, None
+
+
 def _first(record: Mapping[str, Any], aliases: tuple[str, ...], field: str) -> Any:
     for alias in aliases:
         if alias in record:
@@ -70,8 +90,19 @@ def _prefixed(source_id: str) -> str:
     return f"{ID_PREFIX}{source_id}"
 
 
-def _source_id(prefixed_id: str) -> str:
-    return prefixed_id[len(ID_PREFIX):] if prefixed_id.startswith(ID_PREFIX) else prefixed_id
+def _resolve_positive_source_ids(
+    selected_positive_corpus_ids: set[str],
+    available_source_ids: set[str],
+) -> set[str]:
+    """Accept source IDs and adapter-prefixed IDs without stripping real IDs."""
+
+    resolved: set[str] = set()
+    for value in selected_positive_corpus_ids:
+        if value in available_source_ids:
+            resolved.add(value)
+        elif value.startswith(ID_PREFIX) and value[len(ID_PREFIX):] in available_source_ids:
+            resolved.add(value[len(ID_PREFIX):])
+    return resolved
 
 
 def _ensure_unique(records: Iterable[Mapping[str, Any]], aliases: tuple[str, ...], field: str) -> dict[str, Mapping[str, Any]]:
@@ -157,7 +188,8 @@ def select_corpus_records(
     if limit is not None and limit < 1:
         raise DatasetFormatError("corpus limit must be positive when provided")
     normalized = _normalize_corpus(corpus_records)
-    positive_ids = {_source_id(value) for value in selected_positive_corpus_ids}
+    available_source_ids = {record["sourceCorpusId"] for record in normalized}
+    positive_ids = _resolve_positive_source_ids(selected_positive_corpus_ids, available_source_ids)
     if limit is None or limit >= len(normalized):
         return normalized
 
@@ -190,7 +222,8 @@ def select_corpus_sample_records(
         raise DatasetFormatError("corpus sample seed must be a non-blank string")
 
     normalized = _normalize_corpus(corpus_records)
-    positive_ids = {_source_id(value) for value in selected_positive_corpus_ids}
+    available_source_ids = {record["sourceCorpusId"] for record in normalized}
+    positive_ids = _resolve_positive_source_ids(selected_positive_corpus_ids, available_source_ids)
     if sample_size >= len(normalized):
         return normalized
 
@@ -423,6 +456,12 @@ def load_huggingface_records(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="external output directory")
+    parser.add_argument(
+        "--profile",
+        choices=("sampled", "full"),
+        default="sampled",
+        help="corpus profile; sampled is the fixed 5,000-document regression gate",
+    )
     parser.add_argument("--query-limit", type=int, default=DEFAULT_QUERY_LIMIT)
     parser.add_argument("--full", action="store_true", help="include all available queries")
     corpus_selection = parser.add_mutually_exclusive_group()
@@ -460,6 +499,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             corpus, queries, qrels = load_huggingface_records(args.dataset, args.revision)
 
+        corpus_limit, corpus_sample_size = resolve_corpus_selection(
+            args.profile,
+            None if args.corpus_limit == 0 else args.corpus_limit,
+            args.corpus_sample_size,
+        )
         manifest = prepare_from_records(
             corpus,
             queries,
@@ -467,8 +511,8 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             query_limit=None if args.full else args.query_limit,
             k=args.k,
-            corpus_limit=None if args.corpus_limit == 0 else args.corpus_limit,
-            corpus_sample_size=args.corpus_sample_size,
+            corpus_limit=corpus_limit,
+            corpus_sample_size=corpus_sample_size,
             corpus_sample_seed=args.corpus_sample_seed,
             dataset_name=args.dataset,
             revision=args.revision,

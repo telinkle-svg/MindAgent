@@ -22,9 +22,8 @@
 ```powershell
 python evaluation/ecom_retrieval_adapter.py `
   --output C:\temp\mindagent-ecom-retrieval\sample-5000 `
+  --profile sampled `
   --query-limit 100 `
-  --corpus-sample-size 5000 `
-  --corpus-sample-seed mindagent-ecom-v1 `
   --revision 1855a4f1bee3a64e11e439f15f129b4cb30cdb9d
 ```
 
@@ -35,6 +34,7 @@ python evaluation/ecom_retrieval_adapter.py `
 ```powershell
 python evaluation/ecom_retrieval_adapter.py `
   --output C:\temp\mindagent-ecom-retrieval\full `
+  --profile full `
   --full `
   --revision <dataset-commit-sha>
 ```
@@ -84,8 +84,13 @@ python evaluation/run_ecom_vector_baseline.py `
   --output C:\temp\mindagent-ecom-retrieval\sample-5000-l2 `
   --endpoint-mode legacy `
   --metric l2 `
+  --model-digest <ollama-model-digest> `
   --embedding-cache C:\temp\mindagent-ecom-retrieval\sample-5000-embeddings.jsonl
 ```
+
+When `--embedding-cache` is supplied, the immutable model digest is required;
+it prevents vectors from a retagged model or a different Ollama server from
+being reused as if they belonged to the current baseline.
 
 运行器的默认 `legacy + l2` 口径与当前 `RagServiceImpl` 和 `ChunkBgeM3Mapper.xml` 一致；它在内存中执行精确向量排序，因此可用于召回回归，但不等价于 PostgreSQL 查询的网络和数据库延迟。需要比较 Cosine 时，使用完全相同的采样集和 embedding 缓存另跑 `--metric cosine`，不要覆盖 L2 结果。
 

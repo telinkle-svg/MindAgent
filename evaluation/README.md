@@ -70,11 +70,14 @@ python evaluation/score_agent_evaluation.py --mode tool-selection `
 ```powershell
 python evaluation/ecom_retrieval_adapter.py `
   --output C:\temp\mindagent-ecom-retrieval\sample-5000 `
+  --profile sampled `
   --query-limit 100 `
-  --corpus-sample-size 5000 `
-  --corpus-sample-seed mindagent-ecom-v1 `
   --revision 1855a4f1bee3a64e11e439f15f129b4cb30cdb9d
 ```
+
+`sampled` is the CLI default and resolves to the fixed 5,000-document SHA-256
+profile. Use `--profile full --full` only when the optional complete-corpus
+reference is explicitly required.
 
 `run_ecom_vector_baseline.py` 默认调用项目当前使用的 Ollama `/api/embeddings`、保留原始向量并按 L2 距离排序；结果和 embedding 缓存必须放在仓库外。`--metric cosine` 和 `--endpoint-mode embed` 仅用于同一采样集上的对照实验，不得与生产基线混报。
 
