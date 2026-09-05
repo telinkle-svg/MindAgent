@@ -312,6 +312,7 @@ def prepare_from_records(
             else "prefix" if corpus_limit is not None
             else "full"
         ),
+        "selectedPositiveCount": len(selected_positive_ids),
         "corpusCount": len(selected_corpus),
         "k": k,
         "rawDataStored": False,

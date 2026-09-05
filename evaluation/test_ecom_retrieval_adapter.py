@@ -143,6 +143,7 @@ class EcomRetrievalAdapterTest(unittest.TestCase):
             self.assertEqual(manifest["corpusSampleSize"], 2)
             self.assertEqual(manifest["corpusSampleSeed"], "release-1")
             self.assertEqual(manifest["corpusCount"], 2)
+            self.assertEqual(manifest["selectedPositiveCount"], 1)
             selected = self.read_json_records(Path(temp) / "corpus.jsonl")
             self.assertIn("ecom-c-3", [record["chunkId"] for record in selected])
 
