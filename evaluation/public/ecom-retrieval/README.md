@@ -17,13 +17,18 @@
 
 适配器位于 `evaluation/ecom_retrieval_adapter.py`，仅依赖 Python 标准库即可处理已经导出的 JSONL/TSV；直接从 Hugging Face 加载时才需要可选的 `datasets` 依赖。输出目录必须位于仓库外，例如 `C:\temp\mindagent-ecom-retrieval`。
 
-快速回归使用稳定排序的前 100 条查询，默认保留完整语料：
+项目工程回归使用前 100 条查询，并从完整语料中按固定 SHA-256 种子采样 5,000 条候选；采样会额外保留这 100 条查询的所有正例文档：
 
 ```powershell
 python evaluation/ecom_retrieval_adapter.py `
-  --output C:\temp\mindagent-ecom-retrieval\quick `
-  --revision <dataset-commit-sha>
+  --output C:\temp\mindagent-ecom-retrieval\sample-5000 `
+  --query-limit 100 `
+  --corpus-sample-size 5000 `
+  --corpus-sample-seed mindagent-ecom-v1 `
+  --revision 1855a4f1bee3a64e11e439f15f129b4cb30cdb9d
 ```
+
+该采样配置是当前项目的固定工程基线，不声称代表完整语料召回率；manifest 会记录数据集 revision、采样大小、种子和正例保留后的实际候选数。
 
 完整基线使用全部 1,000 条查询：
 
@@ -45,7 +50,7 @@ python evaluation/ecom_retrieval_adapter.py `
   --revision <dataset-commit-sha>
 ```
 
-`--corpus-limit N` 可生成受限候选集，但适配器会强制保留所选查询的正例文档；使用该选项时必须在结果报告中记录候选集大小，不能与完整语料结果直接混比。
+`--corpus-sample-size N` 使用稳定哈希采样，适合工程回归；`--corpus-limit N` 保留为旧的前缀限制模式。两种受限候选集都必须在结果报告中记录候选集大小，不能与完整语料结果直接混比。
 
 ## 与 MindAgent 评分器衔接
 
@@ -69,6 +74,20 @@ python evaluation/score_agent_evaluation.py --mode rag `
   --results C:\temp\mindagent-ecom-retrieval\quick-results.jsonl `
   --pretty
 ```
+
+若要直接生成当前向量链路的结果，可运行标准库基线运行器：
+
+```powershell
+python evaluation/run_ecom_vector_baseline.py `
+  --corpus C:\temp\mindagent-ecom-retrieval\sample-5000\corpus.jsonl `
+  --queries C:\temp\mindagent-ecom-retrieval\sample-5000\queries.jsonl `
+  --output C:\temp\mindagent-ecom-retrieval\sample-5000-l2 `
+  --endpoint-mode legacy `
+  --metric l2 `
+  --embedding-cache C:\temp\mindagent-ecom-retrieval\sample-5000-embeddings.jsonl
+```
+
+运行器的默认 `legacy + l2` 口径与当前 `RagServiceImpl` 和 `ChunkBgeM3Mapper.xml` 一致；它在内存中执行精确向量排序，因此可用于召回回归，但不等价于 PostgreSQL 查询的网络和数据库延迟。需要比较 Cosine 时，使用完全相同的采样集和 embedding 缓存另跑 `--metric cosine`，不要覆盖 L2 结果。
 
 该数据集每条查询只有一个标注正例，适合做确定性检索回归；它主要衡量召回排序，不覆盖 Markdown 切分、生成式答案忠实度或长期记忆，因此这些能力仍由 `evaluation/rag/` 中的项目内数据补充。
 

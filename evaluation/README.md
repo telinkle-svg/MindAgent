@@ -10,6 +10,8 @@ evaluation/
 ├── test_score_agent_evaluation.py
 ├── ecom_retrieval_adapter.py
 ├── test_ecom_retrieval_adapter.py
+├── run_ecom_vector_baseline.py
+├── test_ecom_vector_baseline.py
 ├── public/
 │   └── ecom-retrieval/
 │       ├── README.md
@@ -60,6 +62,19 @@ python evaluation/score_agent_evaluation.py --mode tool-selection `
 ## 公共 RAG 基线
 
 `public/ecom-retrieval/` 记录公开的 `mteb/EcomRetrieval` 数据集来源和运行契约。原始数据及结果保存在仓库外，由 `ecom_retrieval_adapter.py` 转换为与本评分器兼容的 gold/corpus JSONL；该目录不提交下载缓存。具体的快速（100 查询）和完整（1,000 查询）命令、revision 固定方式及候选集限制说明见其 [README](public/ecom-retrieval/README.md)。
+
+当前工程回归默认使用固定的 100 条查询和 5,000 条语料哈希采样，并强制保留这些查询的正例文档：
+
+```powershell
+python evaluation/ecom_retrieval_adapter.py `
+  --output C:\temp\mindagent-ecom-retrieval\sample-5000 `
+  --query-limit 100 `
+  --corpus-sample-size 5000 `
+  --corpus-sample-seed mindagent-ecom-v1 `
+  --revision 1855a4f1bee3a64e11e439f15f129b4cb30cdb9d
+```
+
+`run_ecom_vector_baseline.py` 默认调用项目当前使用的 Ollama `/api/embeddings`、保留原始向量并按 L2 距离排序；结果和 embedding 缓存必须放在仓库外。`--metric cosine` 和 `--endpoint-mode embed` 仅用于同一采样集上的对照实验，不得与生产基线混报。
 
 缺少结果的 gold 用例会计为未命中/不正确，并在 `missingCaseIds` 中列出；格式错误或重复 ID 会以非零退出码终止。评分器不会把未执行用例误报为通过。
 
