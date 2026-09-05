@@ -63,6 +63,8 @@ python evaluation/score_agent_evaluation.py --mode tool-selection `
 
 `public/ecom-retrieval/` 记录公开的 `mteb/EcomRetrieval` 数据集来源和运行契约。原始数据及结果保存在仓库外，由 `ecom_retrieval_adapter.py` 转换为与本评分器兼容的 gold/corpus JSONL；该目录不提交下载缓存。具体的快速（100 查询）和完整（1,000 查询）命令、revision 固定方式及候选集限制说明见其 [README](public/ecom-retrieval/README.md)。
 
+完整 1,000 查询 profile 仅作为需要更高统计覆盖时的可选参考，不是当前项目的必跑回归门禁；默认门禁使用下方固定采样 profile。
+
 当前工程回归默认使用固定的 100 条查询和 5,000 条语料哈希采样，并强制保留这些查询的正例文档：
 
 ```powershell

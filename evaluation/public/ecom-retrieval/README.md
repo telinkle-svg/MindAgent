@@ -30,7 +30,7 @@ python evaluation/ecom_retrieval_adapter.py `
 
 该采样配置是当前项目的固定工程基线，不声称代表完整语料召回率；manifest 会记录数据集 revision、采样大小、种子和正例保留后的实际候选数。
 
-完整基线使用全部 1,000 条查询：
+完整基线使用全部 1,000 条查询（可选，不是当前项目的固定回归门禁）：
 
 ```powershell
 python evaluation/ecom_retrieval_adapter.py `
